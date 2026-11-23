@@ -20,6 +20,9 @@ import {
 } from './validate.js';
 import { MAX_CLUE_LENGTH, checkClue, checkName, normalizeText } from './cardsPdf.js';
 import { MIN_PLAYERS, drawAssignments, isValidAssignment } from './draw.js';
+import { buildCardsPdf } from './cardsPdf.js';
+import { createGenericDeck } from './genericClues.js';
+import { shuffle } from './random.js';
 
 // --- Helpers -------------------------------------------------------------------------------------------------------
 
@@ -189,10 +192,10 @@ export const eventMethods = {
    */
   async DELETE(ctx) {
     const event = await requireAdmin(ctx);
-    if (event.status !== 'preparing' && event.status !== 'drawn') {
+    if (event.status !== 'preparing' && event.status !== 'drawn' && event.status !== 'released') {
       throw new HttpError(409, 'El evento ya no se puede borrar.');
     }
-    if (event.status === 'drawn' && ctx.req.query?.confirm !== 'BORRAR') {
+    if (event.status !== 'preparing' && ctx.req.query?.confirm !== 'BORRAR') {
       throw new HttpError(409, 'El sorteo ya se hizo. Borrarlo destruye el resultado: hace falta confirmarlo.');
     }
     await ctx.store.deleteEvent(event.id);
@@ -443,6 +446,77 @@ export const cluesMethods = {
     const enc = clues.map((c, i) => ctx.cipher.encrypt(c, poolAad(recipientId, i + 1)));
     const done = await ctx.store.confirmClues(event.id, participant.id, recipientId, enc);
     if (!done) throw new HttpError(409, 'No se pudieron confirmar las pistas (ya confirmadas o evento cerrado).');
+    return { body: { ok: true } };
+  },
+};
+
+// --- /api/cards ----------------------------------------------------------------------------------------------------
+
+/** Fija el orden de impresión del pool, una sola vez, mezclado con aleatoriedad criptográfica (sin autor ni fecha). */
+async function ensurePositions(ctx, eventId) {
+  const rows = await ctx.store.listPool(eventId);
+  if (rows.every((r) => r.position != null)) return rows;
+  const positions = [];
+  for (let round = 1; round <= CLUE_COUNT; round++) {
+    shuffle(rows.filter((r) => r.round === round).map((r) => r.id)).forEach((id, position) => positions.push({ id, position }));
+  }
+  await ctx.store.setPoolPositions(eventId, positions);
+  return ctx.store.listPool(eventId);
+}
+
+export const cardsMethods = {
+  /** Descarga el PDF de tarjetas (solo la organizadora y solo con el evento liberado). Siempre sale igual. */
+  async GET(ctx) {
+    const event = await requireAdmin(ctx);
+    if (event.status !== 'released') throw new HttpError(409, 'Las pistas todavía no se liberaron.');
+    const participants = await ctx.store.listParticipants(event.id);
+    const rows = await ensurePositions(ctx, event.id);
+    if (rows.length !== participants.length * CLUE_COUNT) throw new HttpError(500, 'Faltan pistas para armar las tarjetas.');
+
+    const names = new Map(participants.map((p) => [p.id, p.name]));
+    const rounds = [];
+    for (let round = 1; round <= CLUE_COUNT; round++) {
+      const cards = rows
+        .filter((r) => r.round === round)
+        .sort((a, b) => a.position - b.position)
+        .map((r) => ({
+          recipient: names.get(r.recipient_id),
+          text: ctx.cipher.decrypt(r.text_enc, poolAad(r.recipient_id, round)),
+        }));
+      rounds.push({ round, cards });
+    }
+    const data = await buildCardsPdf(rounds);
+    return { file: { data, contentType: 'application/pdf', filename: 'tarjetas.pdf' } };
+  },
+
+  /**
+   * Libera las pistas: a quien no confirmó se le completan con su borrador y, si falta, con pistas genéricas.
+   * Después no se puede escribir ni cambiar nada.
+   */
+  async POST(ctx) {
+    const event = await requireAdmin(ctx);
+    if (event.status !== 'drawn') throw new HttpError(409, 'Las pistas ya se liberaron o todavía no se hizo el sorteo.');
+    const participants = await ctx.store.listParticipants(event.id);
+    const nextGeneric = createGenericDeck();
+
+    const fillers = [];
+    for (const p of participants.filter((x) => !x.has_confirmed)) {
+      const encrypted = await ctx.store.getRecipientEnc(p.id);
+      if (!encrypted) throw new HttpError(409, 'Falta una asignación: no se pueden liberar las pistas.');
+      const recipientId = ctx.cipher.decrypt(encrypted, p.id);
+      const drafts = await ctx.store.getDraftsEnc(p.id);
+      const texts = drafts.map((e, i) => (e ? ctx.cipher.decrypt(e, draftAad(p.id, i + 1)) : ''));
+      const missing = texts.filter((t) => !t).length;
+      const extra = nextGeneric(missing);
+      texts.forEach((text, i) => {
+        const clue = text || extra.pop();
+        fillers.push({ recipient_id: recipientId, round: i + 1, text_enc: ctx.cipher.encrypt(clue, poolAad(recipientId, i + 1)) });
+      });
+    }
+
+    const done = await ctx.store.releaseEvent(event.id, fillers);
+    if (!done) throw new HttpError(409, 'No se pudo liberar: probá de nuevo.');
+    await ensurePositions(ctx, event.id);
     return { body: { ok: true } };
   },
 };

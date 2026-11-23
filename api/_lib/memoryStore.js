@@ -139,6 +139,30 @@ export function createMemoryStore() {
       return true;
     },
 
+    async releaseEvent(eventId, fillers) {
+      const event = events.find((e) => e.id === eventId);
+      if (!event || event.status !== 'drawn') return false;
+      for (const f of fillers) {
+        if (cluePool.some((r) => r.recipient_id === f.recipient_id && r.round === f.round)) continue;
+        cluePool.push({ id: randomUUID(), event_id: eventId, recipient_id: f.recipient_id, round: f.round, text_enc: f.text_enc });
+      }
+      for (const p of participants) if (p.event_id === eventId) p.confirmed = true;
+      for (let j = drafts.length - 1; j >= 0; j--) {
+        if (participants.some((p) => p.id === drafts[j].participant_id && p.event_id === eventId)) drafts.splice(j, 1);
+      }
+      event.status = 'released';
+      return true;
+    },
+    async listPool(eventId) {
+      return cluePool.filter((r) => r.event_id === eventId).map((r) => ({ ...r, position: r.position ?? null }));
+    },
+    async setPoolPositions(eventId, positions) {
+      for (const { id, position } of positions) {
+        const row = cluePool.find((r) => r.id === id && r.event_id === eventId);
+        if (row) row.position = position;
+      }
+    },
+
     async getParticipantBySession(sessionHash) {
       const p = participants.find((x) => x.session_hash === sessionHash);
       if (!p) return null;

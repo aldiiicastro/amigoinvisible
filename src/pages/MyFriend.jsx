@@ -70,6 +70,11 @@ export default function MyFriend() {
         Es un secreto: no se lo cuentes a nadie. Podés volver a esta pantalla cuando quieras desde este mismo teléfono.
       </Text>
       {data.event.status === 'drawn' && <CluesForm recipientName={data.recipientName} />}
+      {data.event.status === 'released' && (
+        <Alert color="pine" title="Pistas listas">
+          Las pistas ya están armadas. Ya no se pueden cambiar. ¡Nos vemos en la entrega!
+        </Alert>
+      )}
       {data.me.isAdmin && <AdminBack />}
     </Stack>
   );

@@ -34,6 +34,7 @@ export const api = {
   createInvite: (participantId) => request('POST', '/api/invites', { participantId }),
   enter: (token) => request('POST', '/api/enter', { token }),
   me: (scope) => request('GET', `/api/me${scope ? `?scope=${scope}` : ''}`),
+  releaseClues: () => request('POST', '/api/cards', {}),
   getClues: () => request('GET', '/api/clues'),
   saveClues: (clues) => request('PUT', '/api/clues', { clues }),
   confirmClues: (clues) => request('POST', '/api/clues', { clues }),

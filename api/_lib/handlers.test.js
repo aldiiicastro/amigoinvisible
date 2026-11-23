@@ -2,6 +2,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandler } from './http.js';
 import {
+  cardsMethods,
   cluesMethods,
   drawMethods,
   enterMethods,
@@ -15,6 +16,9 @@ import {
 import { createMemoryStore } from './memoryStore.js';
 import { createCipher } from './cipher.js';
 import { sha256 } from './auth.js';
+import { PDFDocument } from 'pdf-lib';
+import { GENERIC_CLUES } from './genericClues.js';
+import { checkClue } from './cardsPdf.js';
 
 const cipher = createCipher(Buffer.alloc(32, 7).toString('base64'));
 
@@ -34,6 +38,7 @@ beforeEach(() => {
     enter: make(enterMethods),
     me: make(meMethods),
     clues: make(cluesMethods),
+    cards: make(cardsMethods),
   };
 });
 
@@ -50,6 +55,10 @@ function makeRes() {
       return this;
     },
     json(b) {
+      this.body = b;
+      return this;
+    },
+    send(b) {
       this.body = b;
       return this;
     },
@@ -253,10 +262,10 @@ test('después del sorteo no se puede sumar ni quitar gente, pero sí corregir n
   assert.deepEqual([post.statusCode, del.statusCode, patch.statusCode], [409, 409, 200]);
 });
 
-test('con el evento liberado o cerrado ya no se edita nada', async () => {
+test('con el evento cerrado ya no se edita nada', async () => {
   const { cookie } = await createEvent();
   const add = await call(api.participants, { method: 'POST', cookie, body: { name: 'Bruno', phone: '11 1111 1111' } });
-  store._db.events[0].status = 'released';
+  store._db.events[0].status = 'closed';
   const patch = await call(api.participants, {
     method: 'PATCH',
     cookie,
@@ -749,4 +758,89 @@ test('pistas: el pool no se puede leer por ninguna API y el borrador de uno no l
   await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: CLUES } });
   const seen = await call(api.clues, { cookie: carla.cookie });
   assert.deepEqual(seen.body.clues, ['', '', '']);
+});
+
+// --- Liberación y PDF (Etapa 5) ------------------------------------------------------------------------------------
+
+const N_PLAYERS = PEOPLE.length + 1;
+
+async function releaseWithTwoConfirmed() {
+  const admin = await setupDrawn();
+  const bruno = await playerSession(admin, 'Bruno');
+  await call(api.clues, { method: 'POST', cookie: bruno.cookie, body: { clues: CLUES } });
+  await call(api.clues, { method: 'POST', cookie: admin, body: { clues: CLUES } });
+  const carla = await playerSession(admin, 'Carla');
+  await call(api.clues, { method: 'PUT', cookie: carla.cookie, body: { clues: ['Borrador de Carla', '', ''] } });
+  return { admin, bruno, carla };
+}
+
+test('pistas genéricas: todas entran en la tarjeta y son distintas', async () => {
+  assert.ok(GENERIC_CLUES.length >= 20);
+  assert.equal(new Set(GENERIC_CLUES).size, GENERIC_CLUES.length);
+  for (const c of GENERIC_CLUES) assert.equal(await checkClue(c), null, c);
+});
+
+test('liberar: exige administradora y estado sorteado', async () => {
+  const admin = await setupEvent();
+  assert.equal((await call(api.cards, { method: 'POST', body: {} })).statusCode, 401);
+  assert.equal((await call(api.cards, { method: 'POST', cookie: admin, body: {} })).statusCode, 409);
+  assert.equal((await call(api.cards)).statusCode, 401);
+  assert.equal((await call(api.cards, { cookie: admin })).statusCode, 409);
+});
+
+test('liberar: completa a quien no confirmó (borrador primero, después genéricas) y deja 3 pistas por persona', async () => {
+  const { admin, carla } = await releaseWithTwoConfirmed();
+  assert.equal((await call(api.cards, { method: 'POST', cookie: admin, body: {} })).statusCode, 200);
+  assert.equal(store._db.events[0].status, 'released');
+  assert.equal(store._db.cluePool.length, N_PLAYERS * 3);
+  assert.equal(store._db.drafts.length, 0);
+
+  const texts = store._db.cluePool.map((r) => ({ r, text: cipher.decrypt(r.text_enc, `pool:${r.recipient_id}:${r.round}`) }));
+  const forCarla = texts.filter((x) => x.r.recipient_id === recipientIdOf(carla.id)).sort((a, b) => a.r.round - b.r.round);
+  assert.equal(forCarla[0].text, 'Borrador de Carla');
+  for (const x of forCarla.slice(1)) assert.ok(GENERIC_CLUES.includes(x.text));
+  assert.notEqual(forCarla[1].text, forCarla[2].text);
+
+  // cada destinatario tiene sus 3 rondas y nada identifica al autor
+  for (const p of store._db.participants) {
+    assert.deepEqual(store._db.cluePool.filter((r) => r.recipient_id === p.id).map((r) => r.round).sort(), [1, 2, 3]);
+  }
+  for (const row of store._db.cluePool) assert.deepEqual(Object.keys(row).sort(), ['event_id', 'id', 'position', 'recipient_id', 'round', 'text_enc']);
+});
+
+test('liberar: es único, cierra pistas y enlaces, y las posiciones son una permutación por ronda', async () => {
+  const { admin, bruno } = await releaseWithTwoConfirmed();
+  await call(api.cards, { method: 'POST', cookie: admin, body: {} });
+  assert.equal((await call(api.cards, { method: 'POST', cookie: admin, body: {} })).statusCode, 409);
+  assert.equal((await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: CLUES } })).statusCode, 409);
+  assert.equal((await call(api.invites, { method: 'POST', cookie: admin, body: { participantId: bruno.id } })).statusCode, 409);
+  for (let round = 1; round <= 3; round++) {
+    const positions = store._db.cluePool.filter((r) => r.round === round).map((r) => r.position).sort((a, b) => a - b);
+    assert.deepEqual(positions, [...Array(N_PLAYERS).keys()]);
+  }
+  const me = await call(api.me, { cookie: bruno.cookie });
+  assert.equal(me.body.state, 'ok');
+  assert.equal(me.body.event.status, 'released');
+});
+
+test('PDF: solo la administradora, siempre igual y con las páginas esperadas', async () => {
+  const { admin, bruno } = await releaseWithTwoConfirmed();
+  await call(api.cards, { method: 'POST', cookie: admin, body: {} });
+  assert.equal((await call(api.cards, { cookie: bruno.cookie })).statusCode, 401);
+
+  const first = await call(api.cards, { cookie: admin });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.headers['Content-Type'], 'application/pdf');
+  assert.ok(first.headers['Content-Disposition'].includes('tarjetas.pdf'));
+  const second = await call(api.cards, { cookie: admin });
+  assert.ok(Buffer.from(first.body).equals(Buffer.from(second.body)));
+  const doc = await PDFDocument.load(first.body);
+  assert.equal(doc.getPageCount(), Math.ceil(N_PLAYERS / 6) * 3);
+});
+
+test('borrar evento liberado exige confirmar', async () => {
+  const { admin } = await releaseWithTwoConfirmed();
+  await call(api.cards, { method: 'POST', cookie: admin, body: {} });
+  assert.equal((await call(api.event, { method: 'DELETE', cookie: admin })).statusCode, 409);
+  assert.equal((await call(api.event, { method: 'DELETE', cookie: admin, query: { confirm: 'BORRAR' } })).statusCode, 200);
 });

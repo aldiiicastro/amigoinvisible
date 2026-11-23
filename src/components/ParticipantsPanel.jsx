@@ -29,7 +29,10 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
   const preparing = event.status === 'preparing';
   const drawn = event.status === 'drawn';
   const canEditNames = preparing || drawn;
+  const released = event.status === 'released';
   const canDraw = preparing && count >= limits.minToDraw;
+  const canDelete = preparing || drawn || released;
+  const missingClues = data.clues ? data.clues.total - data.clues.confirmed : 0;
 
   function open(next) {
     setError(null);
@@ -86,10 +89,32 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         <Alert color="gray">Todavía faltan participantes: se necesitan al menos {limits.minToDraw} para poder sortear.</Alert>
       )}
 
+      {released && (
+        <Card withBorder padding="md">
+          <Stack gap="sm">
+            <Text fw={600}>Pistas liberadas</Text>
+            <Alert color="yellow" title="Imprimilo sin abrirlo">
+              El PDF tiene todas las pistas. Si lo abrís, las vas a poder leer. Mandalo a imprimir directo, por ejemplo desde
+              la opción de compartir de tu celular. Imprimilo en A4 al 100% (sin ajustar a la página) y que otra persona
+              corte y doble las tarjetas.
+            </Alert>
+            <Button component="a" href="/api/cards" size="md" color="pine">
+              Descargar tarjetas (PDF)
+            </Button>
+          </Stack>
+        </Card>
+      )}
+
       {drawn && data.clues && (
         <Alert color="gray" title="Pistas">
           {data.clues.confirmed} de {data.clues.total} confirmaron sus pistas.
         </Alert>
+      )}
+
+      {drawn && data.clues && (
+        <Button size="md" color={missingClues === 0 ? 'pine' : 'gray'} variant={missingClues === 0 ? 'filled' : 'light'} onClick={() => open({ type: 'release' })}>
+          Liberar pistas y armar las tarjetas
+        </Button>
       )}
 
       {drawn && (
@@ -193,7 +218,7 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         </Stack>
       )}
 
-      {drawn && (
+      {(drawn || released) && (
         <Button component={Link} to="/mi-amigo" size="md" variant="light">
           Ver a quién me toca
         </Button>
@@ -204,7 +229,7 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         <Button variant="subtle" onClick={() => open({ type: 'newCode' })}>
           Generar un nuevo código de recuperación
         </Button>
-        {canEditNames && (
+        {canDelete && (
           <Button variant="subtle" color="cranberry" onClick={() => open({ type: 'deleteEvent' })}>
             Borrar el evento
           </Button>
@@ -277,6 +302,31 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
       </ConfirmModal>
 
       <ConfirmModal
+        opened={modal?.type === 'release'}
+        title="Liberar pistas"
+        confirmLabel="Liberar"
+        color="pine"
+        busy={busy}
+        error={error}
+        onClose={close}
+        onConfirm={() =>
+          run(
+            () => api.releaseClues(),
+            () => reload(),
+          )
+        }
+      >
+        <Text>
+          {missingClues === 0
+            ? 'Todos confirmaron sus pistas.'
+            : `Todavía ${missingClues === 1 ? 'falta 1 persona' : `faltan ${missingClues} personas`} por confirmar. A quienes falten se les completa con lo que tengan en borrador y, si no alcanza, con pistas genéricas.`}
+        </Text>
+        <Text size="sm" c="dimmed">
+          Después de liberar nadie puede escribir ni cambiar pistas, y no se puede deshacer.
+        </Text>
+      </ConfirmModal>
+
+      <ConfirmModal
         opened={modal?.type === 'newCode'}
         title="Nuevo código de recuperación"
         confirmLabel="Generar código"
@@ -301,21 +351,21 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         opened={modal?.type === 'deleteEvent'}
         title="Borrar el evento"
         confirmLabel="Borrar todo"
-        confirmDisabled={drawn && confirmText.trim().toUpperCase() !== 'BORRAR'}
+        confirmDisabled={!preparing && confirmText.trim().toUpperCase() !== 'BORRAR'}
         busy={busy}
         error={error}
         onClose={close}
         onConfirm={() =>
           run(
-            () => api.deleteEvent(drawn),
+            () => api.deleteEvent(!preparing),
             () => reload(),
           )
         }
       >
         <Text>
-          Se borran el evento, los participantes{drawn ? ', el sorteo y todos los enlaces' : ''}. No se puede deshacer.
+          Se borran el evento, los participantes{!preparing ? ', el sorteo, las pistas y todos los enlaces' : ''}. No se puede deshacer.
         </Text>
-        {drawn && (
+        {!preparing && (
           <TextInput
             label="Para confirmar, escribí BORRAR"
             value={confirmText}

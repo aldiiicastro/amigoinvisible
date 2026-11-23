@@ -60,10 +60,17 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
   - Pendiente de diseño para Etapa 5: orden del pool (`position`) se fija al liberar, mezclado con `crypto.randomInt`.
   - 91 tests.
 
+- Etapa 5 (requiere correr `supabase/006_release.sql`):
+  - Liberación manual (sin fecha límite automática: no hay procesos persistentes en Vercel; la organizadora decide cuándo). `POST /api/cards` (admin, solo en `drawn`): a quien no confirmó se le arma con su borrador y, si falta, pistas genéricas (`api/_lib/genericClues.js`, 24 frases ambiguas, mazo mezclado sin repetir). Función SQL `release_event` (transacción: inserta rellenos con `on conflict do nothing`, marca todos confirmados, borra borradores, `drawn → released`).
+  - Orden de impresión: `ensurePositions` mezcla cada ronda con `crypto.randomInt` y guarda `clue_pool.position` vía `set_pool_positions`; es perezoso e idempotente (si falla tras liberar, el siguiente GET lo completa). El PDF sale siempre igual.
+  - Descarga: `GET /api/cards` (solo admin, solo `released`), `Content-Disposition: attachment; filename="tarjetas.pdf"`. El panel avisa "Imprimilo sin abrirlo" y arma 3 rondas × ceil(N/6) páginas. Se puede descargar las veces que haga falta.
+  - `createHandler` ahora soporta `{file: {data, contentType, filename}}`. Función 11 de 12 en Hobby (queda 1 libre).
+  - Borrar el evento liberado exige `?confirm=BORRAR` (en la UI, escribir BORRAR). `closed` queda sin usar.
+  - 97 tests.
+
 ## Pendiente
 - Ajustes post-Etapa 3: correr `supabase/004_description.sql` en Supabase y recién después subir/desplegar.
 - Validar con impresión de la muestra nueva (90×90 mm): show-through del papel de 80 g, corte, plegado, legibilidad de 15 pt. Ajustar tamaño/límite si hace falta.
-- Etapa 5: liberación y descarga final.
 - Etapa 6: pruebas de anonimato/permisos y guía de despliegue.
 
 ## Despliegue (resumen)
@@ -73,4 +80,4 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
 4. Supabase Free se pausa tras 7 días sin actividad: entrar antes del evento.
 
 ## Próximo paso
-Probar Etapa 4 en producción. Después, Etapa 5: liberación y PDF final. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.
+Probar Etapa 5 en producción (liberar, descargar, imprimir). Después, Etapa 6: pruebas de anonimato/permisos y guía de despliegue. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.

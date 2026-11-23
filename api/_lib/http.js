@@ -39,6 +39,12 @@ export function createHandler(methods, { store, cipher } = {}) {
       const resolvedCipher = cipher ?? (await import('./cipher.js')).default;
       const result = await fn({ req, body, store: resolvedStore, cipher: resolvedCipher });
       if (result.cookies?.length) res.setHeader('Set-Cookie', result.cookies);
+      if (result.file) {
+        res.setHeader('Content-Type', result.file.contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${result.file.filename}"`);
+        res.status(200).send(Buffer.from(result.file.data));
+        return;
+      }
       res.status(result.status ?? 200).json(result.body ?? {});
     } catch (err) {
       if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });

@@ -197,6 +197,20 @@ const store = {
     );
   },
 
+  /** Libera el evento con las pistas de relleno (ya cifradas). Devuelve false si no estaba en 'drawn'. */
+  async releaseEvent(eventId, fillers) {
+    return check(await db().rpc('release_event', { p_event_id: eventId, p_fillers: fillers })) === true;
+  },
+
+  /** Todas las pistas del pool (cifradas), sin autor. */
+  async listPool(eventId) {
+    return check(await db().from('clue_pool').select('id,recipient_id,round,text_enc,position').eq('event_id', eventId));
+  },
+
+  async setPoolPositions(eventId, positions) {
+    check(await db().rpc('set_pool_positions', { p_event_id: eventId, p_positions: positions }));
+  },
+
   async getParticipantBySession(sessionHash) {
     const row = check(await db().from('participants').select(`${PARTICIPANT_COLS},event_id`).eq('session_hash', sessionHash).maybeSingle());
     if (!row) return null;
