@@ -1,7 +1,7 @@
 // Genera un PDF de muestra con datos falsos para probar impresión, corte y plegado.
 // Uso: npm run sample:pdf [archivo-salida]
 import { writeFile } from 'node:fs/promises';
-import { buildCardsPdf } from '../api/_lib/cardsPdf.js';
+import { buildCardsPdf, checkClue } from '../api/_lib/cardsPdf.js';
 import { shuffle } from '../api/_lib/random.js';
 
 const names = [
@@ -9,7 +9,7 @@ const names = [
   'Facundo', 'Gabriela', 'Hernán', 'Inés', 'María de los Ángeles',
 ];
 
-// Mezcla de largos: cortas, medias y una de 200 caracteres justos (peor caso de ocupación).
+// Mezcla de largos: cortas, medias y varias cerca del límite (peor caso de ocupación).
 const clues = [
   [
     'No soy la persona que está leyendo esto.',
@@ -43,11 +43,17 @@ const clues = [
     'Tengo la costumbre de llegar justo cuando termina la parte más interesante.',
     'Cuando cuento un chiste me río antes que el resto. Lo sé, es una mala estrategia.',
     'Mis amigos me dicen que soy "muy tranquilo" y yo solo estoy pensando en la cena.',
-    'Esta pista tiene exactamente doscientos caracteres para probar el peor caso: tantas palabras como entren, con acentos, eñes, ¿preguntas? y ¡exclamaciones! hasta llegar al máximo permitido por tarjeta.',
+    'Esta pista tiene el largo máximo para probar el peor caso: palabras con acentos, eñes, ¿preguntas? y ¡exclamaciones! hasta llegar al límite permitido por cada tarjeta.',
     'Pregunto "¿falta mucho?" en cada viaje aunque maneje yo.',
     'Aparte de dar pistas, me gusta que me las den. Pero no esta noche.',
   ],
 ];
+
+// Falla con un mensaje claro si alguna pista de ejemplo no entra en la tarjeta.
+for (const text of clues.flat()) {
+  const problem = await checkClue(text);
+  if (problem) throw new Error(`${problem} → "${text}"`);
+}
 
 const rounds = clues.map((texts, i) => ({
   round: i + 1,

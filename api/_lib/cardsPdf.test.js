@@ -13,7 +13,7 @@ test('la grilla entra en una hoja A4', () => {
   assert.ok(marginTop + rows * c.h <= page.h);
 });
 
-test('10 participantes y 3 rondas → 6 páginas A4, 2 por ronda', async () => {
+test('10 participantes y 3 rondas → 6 páginas A4, 2 por ronda (6 tarjetas por hoja)', async () => {
   const bytes = await buildCardsPdf([round(1, 10), round(2, 10), round(3, 10)]);
   const doc = await PDFDocument.load(bytes);
   assert.equal(doc.getPageCount(), 6);
@@ -51,16 +51,17 @@ test('acepta una pista de 200 caracteres con palabras normales', async () => {
   assert.equal(await checkClue(text), null);
 });
 
-test('la letra de la pista es de al menos 12 pt', () => {
-  assert.ok(LAYOUT.clueFontSize >= 12);
+test('la letra es grande: pista ≥ 15 pt, nombre ≥ 23 pt', () => {
+  assert.ok(LAYOUT.clueFontSize >= 15);
+  assert.ok(LAYOUT.nameFontSize >= 23);
 });
 
 test('rechaza pistas vacías, largas, con emojis o que no entran', async () => {
   assert.match(await checkClue('   '), /vacía/);
   assert.match(await checkClue('a '.repeat(150)), /supera/);
   assert.match(await checkClue('Hola 🎄'), /imprimir/);
-  assert.equal(await checkClue('palabra '.repeat(24).trim()), null); // 191 caracteres cortos: entra en 8 líneas
-  const longWords = 'wwwwwwwwww '.repeat(18).trim(); // 197 caracteres, una palabra ancha por línea → 18 líneas
+  assert.equal(await checkClue('palabra '.repeat(20).trim()), null); // 159 caracteres: entra en 5 líneas
+  const longWords = 'wwwwwwwwww '.repeat(15).trim(); // 164 caracteres, dos palabras anchas por línea → 8 líneas
   assert.ok(longWords.length <= MAX_CLUE_LENGTH);
   assert.match(await checkClue(longWords), /no entra/);
   assert.match(await checkClue('x'.repeat(60)), /no entra/); // una palabra más ancha que el panel

@@ -60,3 +60,6 @@ alter table drafts       enable row level security;
 alter table clue_pool    enable row level security;
 
 revoke all on all tables in schema public from anon, authenticated;
+
+-- Etapa 2: un solo evento por instalación (MVP). Quitar este índice cuando se agregue el historial de eventos.
+create unique index only_one_event on events ((true));

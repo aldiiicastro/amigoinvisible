@@ -1,9 +1,9 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 // Geometría en milímetros. A4 vertical. Cada tarjeta es una tira de 90×90 mm con un pliegue horizontal al medio:
-//   panel de arriba  = exterior ("Pista 1:" + nombre del destinatario)
-//   panel de abajo   = interior (la pista); se dobla hacia atrás, detrás del panel de arriba.
-// Cerrada mide 90×45 mm.
+//   panel de arriba = frente ("Pista N:" + nombre del destinatario)
+//   panel de abajo  = la pista; se dobla hacia atrás, detrás del panel de arriba. Cerrada mide 90×45 mm.
+// Letra grande a pedido (lectores de 57+): pista 15 pt, nombre 23 pt.
 export const LAYOUT = {
   page: { w: 210, h: 297 },
   card: { w: 90, h: 90 },
@@ -11,15 +11,16 @@ export const LAYOUT = {
   rows: 3,
   marginX: 15,
   marginTop: 14, // deja lugar para el título de la ronda
-  padX: 5,
-  padY: 4,
-  clueFontSize: 12,
-  clueLineHeight: 14.4, // pt
-  labelFontSize: 12,
-  nameFontSize: 20,
-  nameMinFontSize: 12,
+  padX: 4,
+  padY: 3,
+  clueFontSize: 15,
+  clueLineHeight: 18, // pt
+  labelFontSize: 15,
+  nameFontSize: 23,
+  nameMinFontSize: 15,
 };
-export const MAX_CLUE_LENGTH = 200;
+// Con 15 pt entran unas 6 líneas (~186 caracteres de texto normal); checkClue valida que realmente entre.
+export const MAX_CLUE_LENGTH = 180;
 export const CARDS_PER_PAGE = LAYOUT.cols * LAYOUT.rows;
 
 const MM = 72 / 25.4;
@@ -79,11 +80,40 @@ function clueProblem(font, rawText) {
   return null;
 }
 
-let measureFont;
+export const MAX_NAME_LENGTH = 40;
+
+let measureFonts;
+function getMeasureFonts() {
+  measureFonts ??= PDFDocument.create({ updateMetadata: false }).then(async (d) => ({
+    regular: await d.embedFont(StandardFonts.Helvetica),
+    bold: await d.embedFont(StandardFonts.HelveticaBold),
+  }));
+  return measureFonts;
+}
+
 /** Validación para el backend (borrador y confirmación). Devuelve un mensaje o null. */
 export async function checkClue(text) {
-  measureFont ??= PDFDocument.create({ updateMetadata: false }).then((d) => d.embedFont(StandardFonts.Helvetica));
-  return clueProblem(await measureFont, text);
+  return clueProblem((await getMeasureFonts()).regular, text);
+}
+
+/**
+ * Valida el nombre de un participante: que se pueda imprimir y que entre en el frente de la tarjeta.
+ * Se usa al cargarlo, para que el PDF final nunca falle por un nombre. Devuelve un mensaje o null.
+ */
+export async function checkName(rawName) {
+  const name = normalizeText(rawName);
+  if (!name) return 'Falta el nombre.';
+  if (name.length > MAX_NAME_LENGTH) return `El nombre supera los ${MAX_NAME_LENGTH} caracteres.`;
+  const { regular, bold } = await getMeasureFonts();
+  try {
+    regular.encodeText(name);
+  } catch {
+    return 'El nombre tiene caracteres que no se pueden imprimir (emojis o símbolos).';
+  }
+  if (!wrap(name, bold, LAYOUT.nameMinFontSize, panelW())) {
+    return 'El nombre tiene una palabra demasiado larga para la tarjeta.';
+  }
+  return null;
 }
 
 function drawDashed(page, x1, y1, x2, y2, color, thickness = 0.4) {
@@ -112,7 +142,7 @@ function drawCard(page, fonts, card, round, left, top) {
   const innerW = panelW();
   const middle = top - h / 2;
 
-  // Panel de arriba (exterior): "Pista N:" y el nombre, centrados. El nombre baja de tamaño solo si es larguísimo.
+  // Panel de arriba (frente): "Pista N:" y el nombre, centrados. El nombre baja de tamaño solo si es larguísimo.
   let nameSize = LAYOUT.nameFontSize;
   let nameLines = wrap(card.recipient, fonts.bold, nameSize, innerW);
   while (!nameLines && nameSize > LAYOUT.nameMinFontSize) {
@@ -147,7 +177,7 @@ function drawCard(page, fonts, card, round, left, top) {
     });
   });
 
-  // Panel de abajo (interior): la pista, alineada a la izquierda y centrada verticalmente.
+  // Panel de abajo: la pista, alineada a la izquierda y centrada verticalmente.
   const clueLines = wrap(card.text, fonts.regular, LAYOUT.clueFontSize, innerW);
   if (!clueLines || clueLines.length > maxClueLines()) {
     throw new Error('Una pista es demasiado larga para entrar en la tarjeta.');
@@ -212,8 +242,7 @@ export async function buildCardsPdf(rounds) {
       const chunk = clean.slice(start, start + CARDS_PER_PAGE);
       const page = doc.addPage([pageW, pageH]);
 
-      page.drawText(`Ronda ${round}`, { x: originX, y: pageH - mm(8), size: 9, font: fonts.bold, color: GRAY_CUT });
-      drawCutGrid(page, originX, originTop);
+      page.drawText(`Ronda ${round}`, { x: originX, y: pageH - mm(8), size: 9, font: fonts.bold, color: GRAY_CUT });      drawCutGrid(page, originX, originTop);
 
       chunk.forEach((c, i) => {
         const col = i % cols;
