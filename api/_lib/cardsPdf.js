@@ -1,16 +1,23 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-// Geometría en milímetros. A4 vertical, tira de 95×45 mm con un pliegue al medio.
+// Geometría en milímetros. A4 vertical. Cada tarjeta es una tira de 90×90 mm con un pliegue horizontal al medio:
+//   panel de arriba  = exterior ("Pista 1:" + nombre del destinatario)
+//   panel de abajo   = interior (la pista); se dobla hacia atrás, detrás del panel de arriba.
+// Cerrada mide 90×45 mm.
 export const LAYOUT = {
   page: { w: 210, h: 297 },
-  card: { w: 95, h: 45 },
+  card: { w: 90, h: 90 },
   cols: 2,
-  rows: 6,
-  marginX: 10,
+  rows: 3,
+  marginX: 15,
   marginTop: 14, // deja lugar para el título de la ronda
-  padding: 3.5,
-  clueFontSize: 9,
-  clueLineHeight: 11, // pt
+  padX: 5,
+  padY: 4,
+  clueFontSize: 12,
+  clueLineHeight: 14.4, // pt
+  labelFontSize: 12,
+  nameFontSize: 20,
+  nameMinFontSize: 12,
 };
 export const MAX_CLUE_LENGTH = 200;
 export const CARDS_PER_PAGE = LAYOUT.cols * LAYOUT.rows;
@@ -20,6 +27,10 @@ const mm = (v) => v * MM;
 const GRAY_CUT = rgb(0.55, 0.55, 0.55);
 const GRAY_FOLD = rgb(0.78, 0.78, 0.78);
 const BLACK = rgb(0, 0, 0);
+
+const panelW = () => mm(LAYOUT.card.w) - 2 * mm(LAYOUT.padX);
+const panelH = () => mm(LAYOUT.card.h) / 2;
+const maxClueLines = () => Math.floor((panelH() - 2 * mm(LAYOUT.padY)) / LAYOUT.clueLineHeight);
 
 /** Texto en una sola línea lógica; los saltos de línea y espacios repetidos se colapsan. */
 export function normalizeText(text) {
@@ -61,10 +72,10 @@ function clueProblem(font, rawText) {
   } catch {
     return 'La pista tiene caracteres que no se pueden imprimir (emojis o símbolos).';
   }
-  const textW = mm(LAYOUT.card.w) / 2 - 2 * mm(LAYOUT.padding);
-  const lines = wrap(text, font, LAYOUT.clueFontSize, textW);
-  const maxLines = Math.floor((mm(LAYOUT.card.h) - 2 * mm(LAYOUT.padding)) / LAYOUT.clueLineHeight);
-  if (!lines || lines.length > maxLines) return 'La pista no entra en la tarjeta: acortala o separá las palabras muy largas.';
+  const lines = wrap(text, font, LAYOUT.clueFontSize, panelW());
+  if (!lines || lines.length > maxClueLines()) {
+    return 'La pista no entra en la tarjeta: acortala o separá las palabras muy largas.';
+  }
   return null;
 }
 
@@ -85,58 +96,76 @@ function drawDashed(page, x1, y1, x2, y2, color, thickness = 0.4) {
   });
 }
 
-function drawRoundDots(page, round, x, y) {
-  const r = 1.6;
-  for (let i = 0; i < round; i++) {
-    page.drawCircle({ x: x + i * 6, y, size: r, color: BLACK });
-  }
+/** Dibuja líneas de texto centradas verticalmente en un panel; `x` calcula la posición horizontal de cada línea. */
+function drawBlock(page, lines, { font, size, lineHeight, panelTop, x }) {
+  const blockH = lines.length * lineHeight;
+  const top = panelTop - (panelH() - blockH) / 2;
+  lines.forEach((line, i) => {
+    const centerY = top - (i + 0.5) * lineHeight;
+    page.drawText(line, { x: x(line), y: centerY - size * 0.35, size, font, color: BLACK });
+  });
 }
 
 function drawCard(page, fonts, card, round, left, top) {
-  const { card: size, padding } = LAYOUT;
-  const w = mm(size.w);
-  const h = mm(size.h);
-  const panelW = w / 2;
-  const pad = mm(padding);
-  const textW = panelW - 2 * pad;
-  const bottom = top - h;
+  const w = mm(LAYOUT.card.w);
+  const h = mm(LAYOUT.card.h);
+  const innerW = panelW();
+  const middle = top - h / 2;
 
-  // Panel izquierdo (exterior): nombre del destinatario, centrado, tamaño fijo salvo nombres muy largos.
-  let nameSize = 13;
-  let nameLines = wrap(card.recipient, fonts.bold, nameSize, textW);
-  while (!nameLines && nameSize > 8) {
+  // Panel de arriba (exterior): "Pista N:" y el nombre, centrados. El nombre baja de tamaño solo si es larguísimo.
+  let nameSize = LAYOUT.nameFontSize;
+  let nameLines = wrap(card.recipient, fonts.bold, nameSize, innerW);
+  while (!nameLines && nameSize > LAYOUT.nameMinFontSize) {
     nameSize -= 1;
-    nameLines = wrap(card.recipient, fonts.bold, nameSize, textW);
+    nameLines = wrap(card.recipient, fonts.bold, nameSize, innerW);
   }
   if (!nameLines) throw new Error('Un nombre es demasiado largo para la tarjeta.');
-  const nameLH = nameSize * 1.2;
-  const blockH = nameLines.length * nameLH;
-  let y = bottom + h / 2 + blockH / 2 - nameSize;
-  for (const line of nameLines) {
-    const lw = fonts.bold.widthOfTextAtSize(line, nameSize);
-    page.drawText(line, { x: left + panelW / 2 - lw / 2, y, size: nameSize, font: fonts.bold, color: BLACK });
-    y -= nameLH;
-  }
-  drawRoundDots(page, round, left + panelW / 2 - ((round - 1) * 6) / 2, bottom + pad + 2);
 
-  // Panel derecho (interior): la pista.
-  const clueLines = wrap(card.text, fonts.regular, LAYOUT.clueFontSize, textW);
-  const maxLines = Math.floor((h - 2 * pad) / LAYOUT.clueLineHeight);
-  if (!clueLines || clueLines.length > maxLines) {
+  const label = `Pista ${round}:`;
+  const labelH = LAYOUT.labelFontSize * 1.5;
+  const nameLH = nameSize * 1.2;
+  const blockH = labelH + nameLines.length * nameLH;
+  let y = top - (panelH() - blockH) / 2;
+
+  const labelW = fonts.regular.widthOfTextAtSize(label, LAYOUT.labelFontSize);
+  page.drawText(label, {
+    x: left + w / 2 - labelW / 2,
+    y: y - labelH / 2 - LAYOUT.labelFontSize * 0.35,
+    size: LAYOUT.labelFontSize,
+    font: fonts.regular,
+    color: BLACK,
+  });
+  y -= labelH;
+  nameLines.forEach((line, i) => {
+    const lw = fonts.bold.widthOfTextAtSize(line, nameSize);
+    page.drawText(line, {
+      x: left + w / 2 - lw / 2,
+      y: y - (i + 0.5) * nameLH - nameSize * 0.35,
+      size: nameSize,
+      font: fonts.bold,
+      color: BLACK,
+    });
+  });
+
+  // Panel de abajo (interior): la pista, alineada a la izquierda y centrada verticalmente.
+  const clueLines = wrap(card.text, fonts.regular, LAYOUT.clueFontSize, innerW);
+  if (!clueLines || clueLines.length > maxClueLines()) {
     throw new Error('Una pista es demasiado larga para entrar en la tarjeta.');
   }
-  y = top - pad - LAYOUT.clueFontSize;
-  for (const line of clueLines) {
-    page.drawText(line, { x: left + panelW + pad, y, size: LAYOUT.clueFontSize, font: fonts.regular, color: BLACK });
-    y -= LAYOUT.clueLineHeight;
-  }
+  drawBlock(page, clueLines, {
+    font: fonts.regular,
+    size: LAYOUT.clueFontSize,
+    lineHeight: LAYOUT.clueLineHeight,
+    panelTop: middle,
+    x: () => left + mm(LAYOUT.padX),
+  });
 
   // Pliegue (clarito) al medio de la tira.
-  drawDashed(page, left + panelW, top, left + panelW, bottom, GRAY_FOLD, 0.3);
+  drawDashed(page, left, middle, left + w, middle, GRAY_FOLD, 0.3);
 }
 
-function drawCutGrid(page, originX, originTop, rows) {
-  const { card, cols } = LAYOUT;
+function drawCutGrid(page, originX, originTop) {
+  const { card, cols, rows } = LAYOUT;
   const w = mm(card.w);
   const h = mm(card.h);
   const tick = mm(4);
@@ -164,7 +193,7 @@ export async function buildCardsPdf(rounds) {
     bold: await doc.embedFont(StandardFonts.HelveticaBold),
   };
 
-  const { page: pageSize, card, cols, rows, marginX, marginTop } = LAYOUT;
+  const { page: pageSize, card, cols, marginX, marginTop } = LAYOUT;
   const pageW = mm(pageSize.w);
   const pageH = mm(pageSize.h);
   const originX = mm(marginX);
@@ -184,7 +213,7 @@ export async function buildCardsPdf(rounds) {
       const page = doc.addPage([pageW, pageH]);
 
       page.drawText(`Ronda ${round}`, { x: originX, y: pageH - mm(8), size: 9, font: fonts.bold, color: GRAY_CUT });
-      drawCutGrid(page, originX, originTop, rows);
+      drawCutGrid(page, originX, originTop);
 
       chunk.forEach((c, i) => {
         const col = i % cols;

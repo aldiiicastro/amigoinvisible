@@ -13,16 +13,16 @@ test('la grilla entra en una hoja A4', () => {
   assert.ok(marginTop + rows * c.h <= page.h);
 });
 
-test('10 participantes y 3 rondas → 3 páginas A4, una por ronda', async () => {
+test('10 participantes y 3 rondas → 6 páginas A4, 2 por ronda', async () => {
   const bytes = await buildCardsPdf([round(1, 10), round(2, 10), round(3, 10)]);
   const doc = await PDFDocument.load(bytes);
-  assert.equal(doc.getPageCount(), 3);
+  assert.equal(doc.getPageCount(), 6);
   const { width, height } = doc.getPage(0).getSize();
   assert.ok(Math.abs(width - 595.28) < 0.5 && Math.abs(height - 841.89) < 0.5);
 });
 
-test('más de 12 tarjetas en una ronda pasan a otra página, sin mezclar rondas', async () => {
-  const doc = await PDFDocument.load(await buildCardsPdf([round(1, 13), round(2, 13), round(3, 13)]));
+test('las rondas no comparten página: 7 tarjetas por ronda → 2 páginas cada una', async () => {
+  const doc = await PDFDocument.load(await buildCardsPdf([round(1, 7), round(2, 7), round(3, 7)]));
   assert.equal(doc.getPageCount(), 6);
 });
 
@@ -49,6 +49,10 @@ test('acepta acentos, eñes y signos de apertura', async () => {
 test('acepta una pista de 200 caracteres con palabras normales', async () => {
   const text = 'abcde '.repeat(33).trim().slice(0, MAX_CLUE_LENGTH);
   assert.equal(await checkClue(text), null);
+});
+
+test('la letra de la pista es de al menos 12 pt', () => {
+  assert.ok(LAYOUT.clueFontSize >= 12);
 });
 
 test('rechaza pistas vacías, largas, con emojis o que no entran', async () => {
