@@ -68,10 +68,12 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
   - Borrar el evento liberado exige `?confirm=BORRAR` (en la UI, escribir BORRAR). `closed` queda sin usar.
   - 97 tests.
 
+- Etapa 6 (sin SQL nuevo): 8 tests de anonimato/permisos (clave por clave de las respuestas, participante vs. endpoints de admin, cookies inventadas, enlace de un solo uso, pool sin autor, anti-CSRF). `supabase/schema.sql` ahora es el esquema completo (instalación nueva). Guía en `DEPLOY.md`. 105 tests.
+
 ## Pendiente
 - Ajustes post-Etapa 3: correr `supabase/004_description.sql` en Supabase y recién después subir/desplegar.
 - Validar con impresión de la muestra nueva (90×90 mm): show-through del papel de 80 g, corte, plegado, legibilidad de 15 pt. Ajustar tamaño/límite si hace falta.
-- Etapa 6: pruebas de anonimato/permisos y guía de despliegue.
+- Validar con impresión real el PDF final (corte, plegado, 15 pt) y hacer una prueba general con el grupo antes de la fecha.
 
 ## Despliegue (resumen)
 1. Supabase: crear proyecto y ejecutar `supabase/schema.sql` en el SQL Editor.
@@ -80,4 +82,4 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
 4. Supabase Free se pausa tras 7 días sin actividad: entrar antes del evento.
 
 ## Próximo paso
-Probar Etapa 5 en producción (liberar, descargar, imprimir). Después, Etapa 6: pruebas de anonimato/permisos y guía de despliegue. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.
+Etapas 0 a 6 terminadas. Falta: borrar el evento de prueba, crear el real y seguir `DEPLOY.md`. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.

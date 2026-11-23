@@ -844,3 +844,141 @@ test('borrar evento liberado exige confirmar', async () => {
   assert.equal((await call(api.event, { method: 'DELETE', cookie: admin })).statusCode, 409);
   assert.equal((await call(api.event, { method: 'DELETE', cookie: admin, query: { confirm: 'BORRAR' } })).statusCode, 200);
 });
+
+// --- Anonimato y permisos (Etapa 6) --------------------------------------------------------------------------------
+
+// Todas las claves que pueden aparecer en respuestas de la API para la organizadora o un participante.
+const ALLOWED_KEYS = new Set([
+  'state', 'event', 'name', 'status', 'releaseAt', 'description', 'participants', 'id', 'phone', 'isAdmin', 'invite',
+  'limits', 'maxParticipants', 'minToDraw', 'clues', 'confirmed', 'total', 'me', 'recipientName', 'maxLength', 'count',
+  'ok', 'token', 'recoveryCode',
+]);
+
+function keysOf(value, out = new Set()) {
+  if (Array.isArray(value)) value.forEach((v) => keysOf(v, out));
+  else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      out.add(k);
+      keysOf(v, out);
+    }
+  }
+  return out;
+}
+
+/** Juego completo: todas las personas con sesión; devuelve cookies, asignaciones reales y respuestas de la organizadora. */
+async function fullGame() {
+  const admin = await setupDrawn();
+  const players = [];
+  for (const name of PEOPLE) players.push({ name, ...(await playerSession(admin, name)) });
+  return { admin, players };
+}
+
+test('anonimato: cada persona ve solo a su destinatario y el conjunto es un sorteo válido', async () => {
+  const { admin, players } = await fullGame();
+  const seen = new Map();
+  for (const p of players) {
+    const res = await call(api.me, { cookie: p.cookie });
+    assert.deepEqual(Object.keys(res.body).sort(), ['event', 'me', 'recipientName', 'state']);
+    seen.set(p.name, res.body.recipientName);
+    assert.notEqual(res.body.recipientName, p.name);
+  }
+  const adminView = await call(api.me, { cookie: admin });
+  seen.set('Aldana', adminView.body.recipientName);
+  assert.equal(new Set(seen.values()).size, PEOPLE.length + 1); // nadie recibe dos veces
+  assert.deepEqual([...seen.values()].sort(), [...PEOPLE, 'Aldana'].sort());
+});
+
+test('anonimato: ninguna respuesta de la organizadora trae asignaciones, pistas, tokens ni hashes', async () => {
+  const { admin, players } = await fullGame();
+  for (const p of players.slice(0, 3)) await call(api.clues, { method: 'PUT', cookie: p.cookie, body: { clues: ['Borrador secreto uno', '', ''] } });
+  await call(api.clues, { method: 'POST', cookie: players[3].cookie, body: { clues: ['Confirmada secreta A', 'Confirmada secreta B', 'Confirmada secreta C'] } });
+
+  const responses = [];
+  const collect = async (res) => responses.push(JSON.stringify(res.body));
+  await collect(await call(api.event, { cookie: admin }));
+  await collect(await call(api.me, { cookie: admin }));
+  await collect(await call(api.clues, { cookie: admin }));
+  await call(api.cards, { method: 'POST', cookie: admin, body: {} });
+  await collect(await call(api.event, { cookie: admin }));
+  await collect(await call(api.me, { cookie: admin }));
+
+  const all = responses.join('\n');
+  assert.ok(!all.includes('secret')); // ni borradores ni pistas confirmadas
+  assert.ok(!all.includes('recipient_enc') && !all.includes('hash') && !all.includes('giver'));
+  for (const body of responses) for (const k of keysOf(JSON.parse(body))) assert.ok(ALLOWED_KEYS.has(k), `clave inesperada: ${k}`);
+  // la organizadora solo sabe a quién le toca a ella: el nombre de otro destinatario aparece una única vez (el suyo)
+  const adminMe = JSON.parse(responses[1]);
+  assert.ok(PEOPLE.includes(adminMe.recipientName));
+});
+
+test('permisos: un participante no puede usar ninguna operación de la organizadora', async () => {
+  const { players } = await fullGame();
+  const { cookie, id } = players[0];
+  const asParticipant = { cookie };
+  assert.deepEqual((await call(api.event, asParticipant)).body, { state: 'needs_access' });
+  const attempts = [
+    call(api.event, { ...asParticipant, method: 'PATCH', body: { description: 'x' } }),
+    call(api.event, { ...asParticipant, method: 'DELETE', query: { confirm: 'BORRAR' } }),
+    call(api.participants, { ...asParticipant, method: 'POST', body: { name: 'Zeta', phone: '11 9999 9999' } }),
+    call(api.participants, { ...asParticipant, method: 'PATCH', body: { id, name: 'Otro', phone: '11 9999 9999' } }),
+    call(api.participants, { ...asParticipant, method: 'DELETE', query: { id } }),
+    call(api.draw, { ...asParticipant, method: 'POST', body: {} }),
+    call(api.invites, { ...asParticipant, method: 'POST', body: { participantId: id } }),
+    call(api.recoveryCode, { ...asParticipant, method: 'POST', body: {} }),
+    call(api.cards, { ...asParticipant, method: 'POST', body: {} }),
+    call(api.cards, asParticipant),
+  ];
+  for (const res of await Promise.all(attempts)) assert.equal(res.statusCode, 401);
+  assert.equal(store._db.events[0].status, 'drawn');
+});
+
+test('permisos: sin ninguna sesión no se obtiene nada', async () => {
+  await fullGame();
+  assert.deepEqual((await call(api.me)).body, { state: 'no_session' });
+  assert.equal((await call(api.clues)).statusCode, 401);
+  assert.equal((await call(api.clues, { method: 'POST', body: { clues: CLUES } })).statusCode, 401);
+  assert.equal((await call(api.cards)).statusCode, 401);
+  const ev = await call(api.event);
+  assert.deepEqual(ev.body, { state: 'needs_access' });
+});
+
+test('permisos: una cookie inventada no sirve', async () => {
+  await fullGame();
+  assert.deepEqual((await call(api.me, { cookie: 'ai_part=' + 'a'.repeat(43) })).body, { state: 'no_session' });
+  assert.equal((await call(api.clues, { cookie: 'ai_admin=' + 'b'.repeat(43) })).statusCode, 401);
+  assert.equal((await call(api.cards, { cookie: 'ai_admin=' + 'b'.repeat(43) })).statusCode, 401);
+});
+
+test('anonimato: un enlace nuevo deja sin sesión a la anterior y nadie más puede reusar el enlace', async () => {
+  const { admin, players } = await fullGame();
+  const bruno = players[0];
+  const token = await newInvite(admin, bruno.id);
+  const first = await enterWith(token);
+  assert.equal(first.statusCode, 200);
+  assert.equal((await enterWith(token)).statusCode, 404); // enlace de un solo uso
+  const again = await newInvite(admin, bruno.id);
+  assert.deepEqual((await call(api.me, { cookie: bruno.cookie })).body, { state: 'no_session' });
+  assert.deepEqual((await call(api.me, { cookie: sessionOf(first) })).body, { state: 'no_session' });
+  assert.equal((await enterWith(again)).statusCode, 200);
+});
+
+test('anonimato: el pool y los borradores no tienen forma de ligar pista con autor', async () => {
+  const { admin, players } = await fullGame();
+  for (const p of players) await call(api.clues, { method: 'POST', cookie: p.cookie, body: { clues: CLUES } });
+  const poolKeys = new Set(store._db.cluePool.flatMap((r) => Object.keys(r)));
+  assert.deepEqual([...poolKeys].sort(), ['event_id', 'id', 'recipient_id', 'round', 'text_enc']);
+  // nadie recibe pistas de sí mismo y los textos están cifrados
+  for (const row of store._db.cluePool) assert.ok(!row.text_enc.includes('mates'));
+  assert.equal(store._db.drafts.length, 0);
+  // sin liberar, ni la organizadora puede bajar el PDF
+  assert.equal((await call(api.cards, { cookie: admin })).statusCode, 409);
+});
+
+test('seguridad: las operaciones que cambian datos exigen JSON (anti-CSRF)', async () => {
+  const { admin, players } = await fullGame();
+  const form = { contentType: 'application/x-www-form-urlencoded', body: {} };
+  for (const [handler, cookie] of [[api.draw, admin], [api.cards, admin], [api.clues, players[0].cookie], [api.invites, admin], [api.enter, undefined]]) {
+    assert.equal((await call(handler, { method: 'POST', cookie, ...form })).statusCode, 415);
+  }
+  assert.equal((await call(api.clues, { method: 'PUT', cookie: players[0].cookie, ...form })).statusCode, 415);
+});
