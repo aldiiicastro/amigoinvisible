@@ -1,22 +1,35 @@
 import { useState } from 'react';
-import { Alert, Badge, Button, Card, Divider, Group, Stack, Text, Title } from '@mantine/core';
+import { Link } from 'react-router-dom';
+import { Alert, Badge, Button, Card, Divider, Group, Stack, Text, TextInput, Title } from '@mantine/core';
 import { api } from '../api.js';
 import ConfirmModal from './ConfirmModal.jsx';
+import InviteModal from './InviteModal.jsx';
 import ParticipantModal from './ParticipantModal.jsx';
 
 const STATUS_LABEL = { preparing: 'En preparación', drawn: 'Sorteado', released: 'Pistas liberadas', closed: 'Cerrado' };
+const INVITE_BADGE = {
+  none: { label: 'Sin enlace', color: 'gray' },
+  generated: { label: 'Enlace generado', color: 'yellow' },
+  entered: { label: 'Ya entró', color: 'pine' },
+};
 
 export default function ParticipantsPanel({ data, reload, onNewCode }) {
   const { event, participants, limits } = data;
-  const [modal, setModal] = useState(null); // { type: 'add' | 'edit' | 'remove' | 'newCode' | 'deleteEvent', participant? }
+  // modal: { type: 'add' | 'edit' | 'remove' | 'invite' | 'draw' | 'newCode' | 'deleteEvent', participant? }
+  const [modal, setModal] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [confirmText, setConfirmText] = useState('');
 
   const count = participants.length;
-  const editable = event.status === 'preparing';
+  const preparing = event.status === 'preparing';
+  const drawn = event.status === 'drawn';
+  const canEditNames = preparing || drawn;
+  const canDraw = preparing && count >= limits.minToDraw;
 
   function open(next) {
     setError(null);
+    setConfirmText('');
     setModal(next);
   }
   const close = () => setModal(null);
@@ -49,63 +62,94 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         </Group>
       </Stack>
 
-      {editable && count < limits.minToDraw && (
-        <Alert color="gray">
-          Todavía faltan participantes: se necesitan al menos {limits.minToDraw} para poder sortear.
+      {preparing && count < limits.minToDraw && (
+        <Alert color="gray">Todavía faltan participantes: se necesitan al menos {limits.minToDraw} para poder sortear.</Alert>
+      )}
+
+      {drawn && (
+        <Alert color="pine">
+          El sorteo está hecho. Generá y mandá el enlace de cada participante. Cada enlace sirve una sola vez: el que lo abre
+          primero lo gasta, así que no abras los de los demás.
         </Alert>
       )}
 
       <Stack gap="xs">
-        {participants.map((p) => (
-          <Card key={p.id} withBorder padding="sm">
-            <Group justify="space-between" wrap="nowrap" align="center">
-              <Stack gap={0} style={{ minWidth: 0 }}>
-                <Group gap="xs">
-                  <Text fw={600}>{p.name}</Text>
-                  {p.isAdmin && (
-                    <Badge size="sm" variant="light">
-                      Vos
+        {participants.map((p) => {
+          const invite = p.invite ? INVITE_BADGE[p.invite] : null;
+          return (
+            <Card key={p.id} withBorder padding="sm">
+              <Stack gap="xs">
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                  <Stack gap={0} style={{ minWidth: 0 }}>
+                    <Group gap="xs">
+                      <Text fw={600}>{p.name}</Text>
+                      {p.isAdmin && (
+                        <Badge size="sm" variant="light">
+                          Vos
+                        </Badge>
+                      )}
+                    </Group>
+                    <Text size="sm" c="dimmed">
+                      +{p.phone}
+                    </Text>
+                  </Stack>
+                  {invite && (
+                    <Badge color={invite.color} variant="light" style={{ flexShrink: 0 }}>
+                      {invite.label}
                     </Badge>
                   )}
                 </Group>
-                <Text size="sm" c="dimmed">
-                  +{p.phone}
-                </Text>
-              </Stack>
-              {editable && (
-                <Group gap="xs" wrap="nowrap">
-                  <Button size="xs" variant="light" onClick={() => open({ type: 'edit', participant: p })}>
-                    Editar
-                  </Button>
-                  {!p.isAdmin && (
+                <Group gap="xs">
+                  {drawn && !p.isAdmin && (
+                    <Button size="xs" color="pine" onClick={() => open({ type: 'invite', participant: p })}>
+                      {p.invite === 'none' ? 'Generar enlace' : 'Enlace nuevo'}
+                    </Button>
+                  )}
+                  {canEditNames && (
+                    <Button size="xs" variant="light" onClick={() => open({ type: 'edit', participant: p })}>
+                      Editar
+                    </Button>
+                  )}
+                  {preparing && !p.isAdmin && (
                     <Button size="xs" variant="subtle" color="cranberry" onClick={() => open({ type: 'remove', participant: p })}>
                       Quitar
                     </Button>
                   )}
                 </Group>
-              )}
-            </Group>
-          </Card>
-        ))}
+              </Stack>
+            </Card>
+          );
+        })}
       </Stack>
 
-      {editable && (
-        <Button size="md" onClick={() => open({ type: 'add' })} disabled={count >= limits.maxParticipants}>
-          Agregar participante
+      {preparing && (
+        <Stack gap="xs">
+          <Button size="md" variant="light" onClick={() => open({ type: 'add' })} disabled={count >= limits.maxParticipants}>
+            Agregar participante
+          </Button>
+          {count >= limits.maxParticipants && (
+            <Text size="sm" c="dimmed">
+              Llegaste al máximo de {limits.maxParticipants} participantes.
+            </Text>
+          )}
+          <Button size="md" disabled={!canDraw} onClick={() => open({ type: 'draw' })}>
+            Hacer el sorteo
+          </Button>
+        </Stack>
+      )}
+
+      {drawn && (
+        <Button component={Link} to="/mi-amigo" size="md" variant="light">
+          Ver a quién me toca
         </Button>
       )}
-      {count >= limits.maxParticipants && <Text size="sm" c="dimmed">Llegaste al máximo de {limits.maxParticipants} participantes.</Text>}
-
-      <Text size="sm" c="dimmed">
-        Cuando estén todos cargados, el próximo paso es hacer el sorteo y mandar las invitaciones.
-      </Text>
 
       <Divider label="Opciones" labelPosition="left" />
       <Stack gap="xs" align="flex-start">
         <Button variant="subtle" onClick={() => open({ type: 'newCode' })}>
           Generar un nuevo código de recuperación
         </Button>
-        {editable && (
+        {canEditNames && (
           <Button variant="subtle" color="cranberry" onClick={() => open({ type: 'deleteEvent' })}>
             Borrar el evento
           </Button>
@@ -125,6 +169,17 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         />
       )}
 
+      {modal?.type === 'invite' && (
+        <InviteModal
+          key={modal.participant.id}
+          opened
+          participant={modal.participant}
+          eventName={event.name}
+          onClose={close}
+          onChanged={reload}
+        />
+      )}
+
       <ConfirmModal
         opened={modal?.type === 'remove'}
         title="Quitar participante"
@@ -140,6 +195,29 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         }
       >
         <Text>¿Querés quitar a {modal?.participant?.name} de la lista?</Text>
+      </ConfirmModal>
+
+      <ConfirmModal
+        opened={modal?.type === 'draw'}
+        title="Hacer el sorteo"
+        confirmLabel="Sortear"
+        color="pine"
+        busy={busy}
+        error={error}
+        onClose={close}
+        onConfirm={() =>
+          run(
+            () => api.draw(),
+            () => reload(),
+          )
+        }
+      >
+        <Text>
+          Vas a sortear entre {count} participantes. Una vez hecho <b>no se puede repetir</b> ni sumar o quitar gente.
+        </Text>
+        <Text size="sm" c="dimmed">
+          El resultado es secreto: vos solo vas a ver a quién le toca regalarte a vos, igual que los demás.
+        </Text>
       </ConfirmModal>
 
       <ConfirmModal
@@ -167,17 +245,28 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         opened={modal?.type === 'deleteEvent'}
         title="Borrar el evento"
         confirmLabel="Borrar todo"
+        confirmDisabled={drawn && confirmText.trim().toUpperCase() !== 'BORRAR'}
         busy={busy}
         error={error}
         onClose={close}
         onConfirm={() =>
           run(
-            () => api.deleteEvent(),
+            () => api.deleteEvent(drawn),
             () => reload(),
           )
         }
       >
-        <Text>Se borran el evento y todos los participantes cargados. No se puede deshacer.</Text>
+        <Text>
+          Se borran el evento, los participantes{drawn ? ', el sorteo y todos los enlaces' : ''}. No se puede deshacer.
+        </Text>
+        {drawn && (
+          <TextInput
+            label="Para confirmar, escribí BORRAR"
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            autoComplete="off"
+          />
+        )}
       </ConfirmModal>
     </Stack>
   );

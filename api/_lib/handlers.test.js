@@ -1,20 +1,37 @@
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandler } from './http.js';
-import { eventMethods, participantMethods, recoverMethods, recoveryCodeMethods } from './handlers.js';
+import {
+  drawMethods,
+  enterMethods,
+  eventMethods,
+  inviteMethods,
+  meMethods,
+  participantMethods,
+  recoverMethods,
+  recoveryCodeMethods,
+} from './handlers.js';
 import { createMemoryStore } from './memoryStore.js';
+import { createCipher } from './cipher.js';
 import { sha256 } from './auth.js';
+
+const cipher = createCipher(Buffer.alloc(32, 7).toString('base64'));
 
 let store;
 let api;
 
 beforeEach(() => {
   store = createMemoryStore();
+  const make = (methods) => createHandler(methods, { store, cipher });
   api = {
-    event: createHandler(eventMethods, { store }),
-    participants: createHandler(participantMethods, { store }),
-    recover: createHandler(recoverMethods, { store }),
-    recoveryCode: createHandler(recoveryCodeMethods, { store }),
+    event: make(eventMethods),
+    participants: make(participantMethods),
+    recover: make(recoverMethods),
+    recoveryCode: make(recoveryCodeMethods),
+    draw: make(drawMethods),
+    invites: make(inviteMethods),
+    enter: make(enterMethods),
+    me: make(meMethods),
   };
 });
 
@@ -222,17 +239,29 @@ test('participantes: id inexistente → 404', async () => {
   assert.deepEqual([patch.statusCode, del.statusCode], [404, 404]);
 });
 
-test('después del sorteo no se puede modificar a los participantes ni borrar el evento', async () => {
+test('después del sorteo no se puede sumar ni quitar gente, pero sí corregir nombre o celular', async () => {
   const { cookie } = await createEvent();
   const add = await call(api.participants, { method: 'POST', cookie, body: { name: 'Bruno', phone: '11 1111 1111' } });
   const id = add.body.participant.id;
   store._db.events[0].status = 'drawn';
 
   const post = await call(api.participants, { method: 'POST', cookie, body: { name: 'Carla', phone: '11 2222 2222' } });
-  const patch = await call(api.participants, { method: 'PATCH', cookie, body: { id, name: 'Bruno', phone: '11 3333 3333' } });
   const del = await call(api.participants, { method: 'DELETE', cookie, query: { id } });
-  const delEvent = await call(api.event, { method: 'DELETE', cookie });
-  assert.deepEqual([post.statusCode, patch.statusCode, del.statusCode, delEvent.statusCode], [409, 409, 409, 409]);
+  const patch = await call(api.participants, { method: 'PATCH', cookie, body: { id, name: 'Bruno', phone: '11 3333 3333' } });
+  assert.deepEqual([post.statusCode, del.statusCode, patch.statusCode], [409, 409, 200]);
+});
+
+test('con el evento liberado o cerrado ya no se edita nada', async () => {
+  const { cookie } = await createEvent();
+  const add = await call(api.participants, { method: 'POST', cookie, body: { name: 'Bruno', phone: '11 1111 1111' } });
+  store._db.events[0].status = 'released';
+  const patch = await call(api.participants, {
+    method: 'PATCH',
+    cookie,
+    body: { id: add.body.participant.id, name: 'Bruno', phone: '11 3333 3333' },
+  });
+  const delEvent = await call(api.event, { method: 'DELETE', cookie, query: { confirm: 'BORRAR' } });
+  assert.deepEqual([patch.statusCode, delEvent.statusCode], [409, 409]);
 });
 
 // --- Borrar evento -------------------------------------------------------------------------------------------------
@@ -299,4 +328,242 @@ test('métodos no permitidos → 405 y las respuestas no se cachean', async () =
   const res = await call(api.recover, { method: 'GET' });
   assert.equal(res.statusCode, 405);
   assert.equal(res.headers['Cache-Control'], 'no-store');
+});
+
+// --- Sorteo, invitaciones y vista de cada participante -------------------------------------------------------------
+
+const PEOPLE = ['Bruno', 'Carla', 'Diego', 'Elena', 'Facundo'];
+
+/** Evento con la organizadora (Aldana) y los participantes dados. */
+async function setupEvent(names = PEOPLE) {
+  const { cookie } = await createEvent();
+  for (const [i, name] of names.entries()) {
+    const res = await call(api.participants, { method: 'POST', cookie, body: { name, phone: `11 ${1000 + i} 0000` } });
+    assert.equal(res.statusCode, 201);
+  }
+  return cookie;
+}
+
+async function setupDrawn(names = PEOPLE) {
+  const cookie = await setupEvent(names);
+  const res = await call(api.draw, { method: 'POST', cookie, body: {} });
+  assert.equal(res.statusCode, 200);
+  return cookie;
+}
+
+const participantsOf = async (cookie) => (await call(api.event, { cookie })).body.participants;
+
+async function newInvite(cookie, participantId) {
+  const res = await call(api.invites, { method: 'POST', cookie, body: { participantId } });
+  assert.equal(res.statusCode, 200);
+  return res.body.token;
+}
+
+async function enterWith(token) {
+  return call(api.enter, { method: 'POST', body: { token } });
+}
+
+test('sorteo: exige sesión de administradora y al menos 3 participantes', async () => {
+  const cookie = await setupEvent(['Bruno']); // con Aldana son 2
+  assert.equal((await call(api.draw, { method: 'POST', body: {} })).statusCode, 401);
+  assert.equal((await call(api.draw, { method: 'POST', cookie, body: {} })).statusCode, 409);
+  assert.equal(store._db.events[0].status, 'preparing');
+  assert.equal(store._db.assignments.length, 0);
+});
+
+test('sorteo: guarda una asignación por participante y no devuelve el resultado', async () => {
+  const cookie = await setupEvent();
+  const res = await call(api.draw, { method: 'POST', cookie, body: {} });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { ok: true });
+  assert.equal(store._db.events[0].status, 'drawn');
+  assert.equal(store._db.assignments.length, PEOPLE.length + 1);
+});
+
+test('sorteo: el destinatario se guarda cifrado, atado a quien regala, y cumple las reglas', async () => {
+  await setupDrawn();
+  const ids = store._db.participants.map((p) => p.id);
+  const recipients = new Map();
+  for (const a of store._db.assignments) {
+    assert.ok(!ids.some((id) => a.recipient_enc.includes(id)), 'el id no debe verse en claro');
+    recipients.set(a.giver_id, cipher.decrypt(a.recipient_enc, a.giver_id));
+    assert.throws(() => cipher.decrypt(a.recipient_enc, 'otra-fila'));
+  }
+  assert.equal(new Set(recipients.values()).size, ids.length); // cada uno recibe exactamente uno
+  for (const [giver, recipient] of recipients) {
+    assert.ok(ids.includes(recipient));
+    assert.notEqual(giver, recipient); // nadie se regala a sí mismo
+  }
+});
+
+test('sorteo: no se puede repetir ni regenerar', async () => {
+  const cookie = await setupDrawn();
+  const before = JSON.stringify(store._db.assignments);
+  const again = await call(api.draw, { method: 'POST', cookie, body: {} });
+  assert.equal(again.statusCode, 409);
+  assert.equal(JSON.stringify(store._db.assignments), before);
+});
+
+test('después del sorteo, el panel muestra el estado de los enlaces y nada del resultado', async () => {
+  const cookie = await setupDrawn();
+  const res = await call(api.event, { cookie });
+  assert.equal(res.body.event.status, 'drawn');
+  const list = res.body.participants;
+  assert.equal(list.find((p) => p.isAdmin).invite, undefined);
+  assert.ok(list.filter((p) => !p.isAdmin).every((p) => p.invite === 'none'));
+  const text = JSON.stringify(res.body).toLowerCase();
+  for (const word of ['recipient', 'destinatario', 'assignment', 'giver', '_enc']) assert.ok(!text.includes(word), word);
+});
+
+test('enlaces: solo la organizadora, solo después del sorteo y no para ella misma', async () => {
+  const cookie = await setupEvent();
+  const list = await participantsOf(cookie);
+  const bruno = list.find((p) => p.name === 'Bruno');
+  const admin = list.find((p) => p.isAdmin);
+
+  const early = await call(api.invites, { method: 'POST', cookie, body: { participantId: bruno.id } });
+  assert.equal(early.statusCode, 409); // todavía no hubo sorteo
+
+  await call(api.draw, { method: 'POST', cookie, body: {} });
+  assert.equal((await call(api.invites, { method: 'POST', body: { participantId: bruno.id } })).statusCode, 401);
+  assert.equal((await call(api.invites, { method: 'POST', cookie, body: { participantId: admin.id } })).statusCode, 400);
+  assert.equal((await call(api.invites, { method: 'POST', cookie, body: { participantId: 'nadie' } })).statusCode, 404);
+});
+
+test('enlaces: la base guarda solo el hash y el panel pasa a "generated"', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const token = await newInvite(cookie, bruno.id);
+  assert.ok(token.length >= 40);
+  assert.ok(!JSON.stringify(store._db).includes(token));
+  assert.equal(store._db.participants.find((p) => p.id === bruno.id).invite_token_hash, sha256(token));
+  assert.equal((await participantsOf(cookie)).find((p) => p.id === bruno.id).invite, 'generated');
+});
+
+test('canje: el enlace sirve una sola vez, crea una sesión segura y deja de ser válido', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const token = await newInvite(cookie, bruno.id);
+
+  const first = await enterWith(token);
+  assert.equal(first.statusCode, 200);
+  const set = String(first.headers['Set-Cookie'][0]);
+  for (const attr of ['ai_part=', 'HttpOnly', 'SameSite=Strict', 'Secure', 'Path=/api']) assert.ok(set.includes(attr), attr);
+  assert.ok(!JSON.stringify(store._db).includes(set.split(';')[0].split('=')[1])); // la sesión tampoco se guarda en claro
+
+  const second = await enterWith(token);
+  assert.equal(second.statusCode, 404);
+  assert.equal(second.headers['Set-Cookie'], undefined);
+  assert.equal((await participantsOf(cookie)).find((p) => p.id === bruno.id).invite, 'entered');
+});
+
+test('canje: tokens inventados, vacíos o demasiado cortos → 404 sin pistas', async () => {
+  await setupDrawn();
+  for (const token of [undefined, '', 'abc', 'x'.repeat(43), 'x'.repeat(500)]) {
+    const res = await enterWith(token);
+    assert.equal(res.statusCode, 404);
+  }
+});
+
+test('si la organizadora abre un enlace ajeno, la persona se entera: su enlace ya no sirve', async () => {
+  const cookie = await setupDrawn();
+  const carla = (await participantsOf(cookie)).find((p) => p.name === 'Carla');
+  const token = await newInvite(cookie, carla.id);
+
+  assert.equal((await enterWith(token)).statusCode, 200); // lo abre la organizadora
+  const victim = await enterWith(token); // después intenta Carla
+  assert.equal(victim.statusCode, 404);
+  assert.match(victim.body.error, /ya se usó/);
+});
+
+test('reemitir un enlace invalida el anterior y cierra la sesión del participante', async () => {
+  const cookie = await setupDrawn();
+  const diego = (await participantsOf(cookie)).find((p) => p.name === 'Diego');
+  const oldToken = await newInvite(cookie, diego.id);
+  const oldSession = sessionOf(await enterWith(oldToken));
+  assert.equal((await call(api.me, { cookie: oldSession })).body.state, 'ok');
+
+  const newToken = await newInvite(cookie, diego.id);
+  assert.equal((await call(api.me, { cookie: oldSession })).body.state, 'no_session');
+  assert.equal((await enterWith(oldToken)).statusCode, 404);
+  const fresh = await enterWith(newToken);
+  assert.equal(fresh.statusCode, 200);
+  assert.equal((await call(api.me, { cookie: sessionOf(fresh) })).body.state, 'ok');
+});
+
+test('cada participante ve solo a quién le toca; entre todos forman un sorteo válido', async () => {
+  const cookie = await setupDrawn();
+  const list = await participantsOf(cookie);
+  const everyone = list.map((p) => p.name);
+  const seen = new Map();
+
+  for (const p of list.filter((x) => !x.isAdmin)) {
+    const session = sessionOf(await enterWith(await newInvite(cookie, p.id)));
+    const res = await call(api.me, { cookie: session });
+    assert.equal(res.body.state, 'ok');
+    assert.equal(res.body.me.name, p.name);
+    seen.set(p.name, res.body.recipientName);
+
+    // La respuesta no trae ids ni nombres de nadie más que el propio y el de su amigo invisible.
+    const text = JSON.stringify(res.body);
+    for (const other of everyone.filter((n) => n !== p.name && n !== res.body.recipientName)) assert.ok(!text.includes(other), other);
+    assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-/.test(text), 'no deben viajar ids');
+  }
+
+  const adminView = await call(api.me, { cookie });
+  assert.equal(adminView.body.state, 'ok');
+  assert.equal(adminView.body.me.isAdmin, true);
+  seen.set('Aldana', adminView.body.recipientName);
+
+  assert.equal(seen.size, everyone.length);
+  assert.equal(new Set(seen.values()).size, everyone.length); // cada uno recibe exactamente un regalo
+  for (const [giver, recipient] of seen) assert.notEqual(giver, recipient);
+});
+
+test('me: sin sesión, con cookie falsa o antes del sorteo no filtra nada', async () => {
+  const cookie = await setupEvent();
+  assert.deepEqual((await call(api.me)).body, { state: 'no_session' });
+  assert.deepEqual((await call(api.me, { cookie: 'ai_part=inventada' })).body, { state: 'no_session' });
+  assert.deepEqual((await call(api.me, { cookie: 'ai_admin=inventada' })).body, { state: 'no_session' });
+  const admin = await call(api.me, { cookie });
+  assert.equal(admin.body.state, 'not_drawn');
+  assert.equal(admin.body.recipientName, undefined);
+});
+
+test('la cookie de participante no da acceso de administradora', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const session = sessionOf(await enterWith(await newInvite(cookie, bruno.id)));
+
+  assert.deepEqual((await call(api.event, { cookie: session })).body, { state: 'needs_access' });
+  assert.equal((await call(api.draw, { method: 'POST', cookie: session, body: {} })).statusCode, 401);
+  assert.equal((await call(api.invites, { method: 'POST', cookie: session, body: { participantId: bruno.id } })).statusCode, 401);
+  assert.equal((await call(api.participants, { method: 'POST', cookie: session, body: { name: 'Intruso', phone: '11 1111 1111' } })).statusCode, 401);
+});
+
+test('si se corrige un nombre después del sorteo, el amigo invisible lo ve actualizado', async () => {
+  const cookie = await setupDrawn();
+  const list = await participantsOf(cookie);
+  const bruno = list.find((p) => p.name === 'Bruno');
+  const session = sessionOf(await enterWith(await newInvite(cookie, bruno.id)));
+  const target = (await call(api.me, { cookie: session })).body.recipientName;
+  const targetPerson = list.find((p) => p.name === target);
+
+  await call(api.participants, { method: 'PATCH', cookie, body: { id: targetPerson.id, name: `${target} Z.`, phone: '11 9999 9999' } });
+  assert.equal((await call(api.me, { cookie: session })).body.recipientName, `${target} Z.`);
+});
+
+test('borrar un evento ya sorteado exige confirmación explícita y limpia todo', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const session = sessionOf(await enterWith(await newInvite(cookie, bruno.id)));
+
+  assert.equal((await call(api.event, { method: 'DELETE', cookie })).statusCode, 409);
+  assert.equal((await call(api.event, { method: 'DELETE', cookie, query: { confirm: 'si' } })).statusCode, 409);
+  assert.equal(store._db.events.length, 1);
+
+  assert.equal((await call(api.event, { method: 'DELETE', cookie, query: { confirm: 'BORRAR' } })).statusCode, 200);
+  assert.equal(store._db.events.length, 0);
+  assert.equal(store._db.assignments.length, 0);
+  assert.equal((await call(api.me, { cookie: session })).body.state, 'no_session');
 });

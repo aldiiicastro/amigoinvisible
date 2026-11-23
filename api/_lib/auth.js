@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 
-export const SESSION_COOKIE = 'ai_admin';
+export const SESSION_COOKIE = 'ai_admin'; // sesión de la organizadora
+export const PARTICIPANT_COOKIE = 'ai_part'; // sesión de cada participante, tras canjear su enlace
 const SESSION_MAX_AGE = 60 * 60 * 24 * 90; // 90 días: más que lo que dura el evento
 
 // Sin I, L, O, 0 ni 1 para que no se confundan al copiarlo a mano. 16 símbolos de 31 ≈ 79 bits.
@@ -44,8 +45,8 @@ export function parseCookies(header) {
   return out;
 }
 
-export function tokenFromRequest(req) {
-  return parseCookies(req.headers?.cookie)[SESSION_COOKIE] || null;
+export function tokenFromRequest(req, cookieName = SESSION_COOKIE) {
+  return parseCookies(req.headers?.cookie)[cookieName] || null;
 }
 
 /** Secure salvo que el proxy diga explícitamente que es http (desarrollo local). */
@@ -54,12 +55,12 @@ export function isSecureRequest(req) {
 }
 
 // Path=/api: el navegador solo manda la cookie a las funciones, nunca a las páginas.
-export function sessionCookie(token, req) {
-  return `${SESSION_COOKIE}=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE}${
+export function sessionCookie(token, req, cookieName = SESSION_COOKIE) {
+  return `${cookieName}=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE}${
     isSecureRequest(req) ? '; Secure' : ''
   }`;
 }
 
-export function clearSessionCookie(req) {
-  return `${SESSION_COOKIE}=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0${isSecureRequest(req) ? '; Secure' : ''}`;
+export function clearSessionCookie(req, cookieName = SESSION_COOKIE) {
+  return `${cookieName}=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0${isSecureRequest(req) ? '; Secure' : ''}`;
 }

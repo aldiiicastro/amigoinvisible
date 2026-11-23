@@ -14,9 +14,9 @@ function requireJson(req) {
 /**
  * Arma una función de Vercel a partir de un mapa método → handler.
  * Cada handler recibe { req, body, store } y devuelve { status?, body?, cookies? }.
- * `store` se inyecta en los tests; en producción se usa el de Supabase.
+ * `store` y `cipher` se inyectan en los tests; en producción se usan Supabase y la clave de entorno.
  */
-export function createHandler(methods, { store } = {}) {
+export function createHandler(methods, { store, cipher } = {}) {
   return async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     try {
@@ -36,7 +36,8 @@ export function createHandler(methods, { store } = {}) {
       if (body === null || typeof body !== 'object') throw new HttpError(400, 'El cuerpo de la solicitud no es JSON válido.');
 
       const resolvedStore = store ?? (await import('./store.js')).default;
-      const result = await fn({ req, body, store: resolvedStore });
+      const resolvedCipher = cipher ?? (await import('./cipher.js')).default;
+      const result = await fn({ req, body, store: resolvedStore, cipher: resolvedCipher });
       if (result.cookies?.length) res.setHeader('Set-Cookie', result.cookies);
       res.status(result.status ?? 200).json(result.body ?? {});
     } catch (err) {

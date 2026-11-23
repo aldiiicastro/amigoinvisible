@@ -7,6 +7,9 @@ export default function Home() {
     <Stack gap="md">
       <Title order={1}>🎄 Amigo Invisible</Title>
       <Text>Si te pasaron un enlace por WhatsApp, abrilo desde ese mensaje para entrar.</Text>
+      <Anchor component={Link} to="/mi-amigo">
+        Ya entré antes: ver a quién le regalo
+      </Anchor>
       <Anchor component={Link} to="/admin" size="sm" c="dimmed">
         Soy quien organiza el juego
       </Anchor>

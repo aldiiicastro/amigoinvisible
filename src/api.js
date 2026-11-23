@@ -29,7 +29,11 @@ async function request(method, path, body) {
 export const api = {
   getEvent: () => request('GET', '/api/event'),
   createEvent: (payload) => request('POST', '/api/event', payload),
-  deleteEvent: () => request('DELETE', '/api/event'),
+  deleteEvent: (confirmDrawn = false) => request('DELETE', `/api/event${confirmDrawn ? '?confirm=BORRAR' : ''}`),
+  draw: () => request('POST', '/api/draw', {}),
+  createInvite: (participantId) => request('POST', '/api/invites', { participantId }),
+  enter: (token) => request('POST', '/api/enter', { token }),
+  me: () => request('GET', '/api/me'),
   addParticipant: (payload) => request('POST', '/api/participants', payload),
   updateParticipant: (payload) => request('PATCH', '/api/participants', payload),
   removeParticipant: (id) => request('DELETE', `/api/participants?id=${encodeURIComponent(id)}`),
