@@ -18,7 +18,7 @@ import {
   validateDescription,
   validateEventName,
 } from './validate.js';
-import { checkName } from './cardsPdf.js';
+import { MAX_CLUE_LENGTH, checkClue, checkName, normalizeText } from './cardsPdf.js';
 import { MIN_PLAYERS, drawAssignments, isValidAssignment } from './draw.js';
 
 // --- Helpers -------------------------------------------------------------------------------------------------------
@@ -95,6 +95,22 @@ function assertNameFree(list, name, exceptId = null) {
 
 // --- /api/event ----------------------------------------------------------------------------------------------------
 
+/**
+ * Quién está del otro lado: sesión de participante o, si no hay, la organizadora (con su cookie de administración).
+ * Con ?scope=participant solo cuenta la sesión de participante.
+ */
+async function resolveParticipant(ctx) {
+  let found = null;
+  const sessionToken = tokenFromRequest(ctx.req, PARTICIPANT_COOKIE);
+  if (sessionToken) found = await ctx.store.getParticipantBySession(sha256(sessionToken));
+  if (!found && ctx.req.query?.scope !== 'participant') {
+    const event = await currentEvent(ctx);
+    const admin = event ? await ctx.store.getAdminParticipant(event.id) : null;
+    if (event && admin) found = { participant: admin, event };
+  }
+  return found;
+}
+
 export const eventMethods = {
   /** Estado para la pantalla de administración. Sin sesión válida no devuelve nada del evento. */
   async GET(ctx) {
@@ -107,6 +123,10 @@ export const eventMethods = {
           event: toPublicEvent(event),
           participants: participants.map((p) => toPublicParticipant(p, event.status)),
           limits: { maxParticipants: MAX_PARTICIPANTS, minToDraw: MIN_PLAYERS },
+          // Solo el total: nunca quién confirmó. Aparece después del sorteo.
+          ...(event.status === 'preparing'
+            ? {}
+            : { clues: { confirmed: participants.filter((p) => p.has_confirmed).length, total: participants.length } }),
         },
       };
     }
@@ -352,5 +372,77 @@ export const meMethods = {
         recipientName: recipient.name,
       },
     };
+  },
+};
+
+// --- /api/clues ----------------------------------------------------------------------------------------------------
+
+const CLUE_COUNT = 3;
+
+/** Devuelve la persona y su destinatario, o lanza el error que corresponda. */
+async function requireGiver(ctx) {
+  const found = await resolveParticipant(ctx);
+  if (!found) throw new HttpError(401, 'No encontramos tu sesión. Entrá desde tu enlace.');
+  const { participant, event } = found;
+  if (event.status !== 'drawn') throw new HttpError(409, 'Las pistas se escriben después del sorteo y hasta que se liberen.');
+  const encrypted = await ctx.store.getRecipientEnc(participant.id);
+  if (!encrypted) throw new HttpError(409, 'Todavía no tenés una asignación.');
+  const recipientId = ctx.cipher.decrypt(encrypted, participant.id);
+  return { participant, event, recipientId };
+}
+
+/** Normaliza lo que manda el cliente a exactamente 3 textos (vacíos permitidos en borradores). */
+function readClues(body) {
+  const list = body?.clues;
+  if (!Array.isArray(list) || list.length !== CLUE_COUNT) throw new HttpError(400, `Se esperan ${CLUE_COUNT} pistas.`);
+  return list.map((c) => normalizeText(typeof c === 'string' ? c : ''));
+}
+
+async function checkAll(clues, { requireAll }) {
+  for (const [i, text] of clues.entries()) {
+    if (!text) {
+      if (requireAll) throw new HttpError(400, `Falta la pista ${i + 1}.`);
+      continue;
+    }
+    const problem = await checkClue(text);
+    if (problem) throw new HttpError(400, `Pista ${i + 1}: ${problem}`);
+  }
+}
+
+const draftAad = (participantId, i) => `draft:${participantId}:${i}`;
+const poolAad = (recipientId, round) => `pool:${recipientId}:${round}`;
+
+export const cluesMethods = {
+  /** Estado de las pistas de quien pregunta: si confirmó y su borrador. Nunca devuelve pistas de otras personas. */
+  async GET(ctx) {
+    const { participant } = await requireGiver(ctx);
+    const base = { maxLength: MAX_CLUE_LENGTH, count: CLUE_COUNT };
+    if (participant.has_confirmed) return { body: { ...base, confirmed: true, clues: ['', '', ''] } };
+    const enc = await ctx.store.getDraftsEnc(participant.id);
+    const clues = enc.map((e, i) => (e ? ctx.cipher.decrypt(e, draftAad(participant.id, i + 1)) : ''));
+    return { body: { ...base, confirmed: false, clues } };
+  },
+
+  /** Guarda el borrador (puede estar incompleto). */
+  async PUT(ctx) {
+    const { participant } = await requireGiver(ctx);
+    if (participant.has_confirmed) throw new HttpError(409, 'Ya confirmaste tus pistas.');
+    const clues = readClues(ctx.body);
+    await checkAll(clues, { requireAll: false });
+    const enc = clues.map((c, i) => (c ? ctx.cipher.encrypt(c, draftAad(participant.id, i + 1)) : null));
+    await ctx.store.saveDraftsEnc(participant.id, enc);
+    return { body: { ok: true, clues } };
+  },
+
+  /** Confirma las 3 pistas: pasan al pool anónimo y ya no se pueden cambiar. */
+  async POST(ctx) {
+    const { participant, event, recipientId } = await requireGiver(ctx);
+    if (participant.has_confirmed) throw new HttpError(409, 'Ya confirmaste tus pistas.');
+    const clues = readClues(ctx.body);
+    await checkAll(clues, { requireAll: true });
+    const enc = clues.map((c, i) => ctx.cipher.encrypt(c, poolAad(recipientId, i + 1)));
+    const done = await ctx.store.confirmClues(event.id, participant.id, recipientId, enc);
+    if (!done) throw new HttpError(409, 'No se pudieron confirmar las pistas (ya confirmadas o evento cerrado).');
+    return { body: { ok: true } };
   },
 };

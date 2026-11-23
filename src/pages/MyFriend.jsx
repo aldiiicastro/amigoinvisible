@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Alert, Anchor, Card, Loader, Stack, Text, Title } from '@mantine/core';
 import { api } from '../api.js';
+import CluesForm from '../components/CluesForm.jsx';
 
 // Vista de participante (también la usa la organizadora, con su propia sesión).
 export default function MyFriend() {
@@ -68,6 +69,7 @@ export default function MyFriend() {
       <Text c="dimmed">
         Es un secreto: no se lo cuentes a nadie. Podés volver a esta pantalla cuando quieras desde este mismo teléfono.
       </Text>
+      {data.event.status === 'drawn' && <CluesForm recipientName={data.recipientName} />}
       {data.me.isAdmin && <AdminBack />}
     </Stack>
   );

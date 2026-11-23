@@ -5,6 +5,8 @@ export function createMemoryStore() {
   const events = [];
   const participants = [];
   const assignments = [];
+  const drafts = [];
+  const cluePool = [];
 
   const publicEvent = (e) =>
     e ? { id: e.id, name: e.name, status: e.status, release_at: e.release_at, description: e.description } : null;
@@ -17,12 +19,13 @@ export function createMemoryStore() {
           is_admin: p.is_admin,
           has_invite: Boolean(p.invite_token_hash),
           has_session: Boolean(p.session_hash),
+          has_confirmed: Boolean(p.confirmed),
         }
       : null;
 
   return {
     // Acceso directo para que los tests puedan inspeccionar lo que se guardó.
-    _db: { events, participants, assignments },
+    _db: { events, participants, assignments, drafts, cluePool },
 
     async countEvents() {
       return events.length;
@@ -62,6 +65,7 @@ export function createMemoryStore() {
       if (i >= 0) events.splice(i, 1);
       for (let j = participants.length - 1; j >= 0; j--) if (participants[j].event_id === eventId) participants.splice(j, 1);
       for (let j = assignments.length - 1; j >= 0; j--) if (assignments[j].event_id === eventId) assignments.splice(j, 1);
+      for (let j = cluePool.length - 1; j >= 0; j--) if (cluePool[j].event_id === eventId) cluePool.splice(j, 1);
     },
     async listParticipants(eventId) {
       return participants.filter((p) => p.event_id === eventId).map(publicParticipant);
@@ -114,6 +118,27 @@ export function createMemoryStore() {
       p.session_hash = sessionHash;
       return p.id;
     },
+    async getDraftsEnc(participantId) {
+      return drafts.find((d) => d.participant_id === participantId)?.clues ?? [null, null, null];
+    },
+    async saveDraftsEnc(participantId, clues) {
+      const row = drafts.find((d) => d.participant_id === participantId);
+      if (row) row.clues = clues;
+      else drafts.push({ participant_id: participantId, clues });
+    },
+    async confirmClues(eventId, participantId, recipientId, cluesEnc) {
+      const event = events.find((e) => e.id === eventId);
+      const p = participants.find((x) => x.id === participantId && x.event_id === eventId);
+      if (!event || event.status !== 'drawn' || !p || p.confirmed) return false;
+      cluesEnc.forEach((text_enc, i) =>
+        cluePool.push({ id: randomUUID(), event_id: eventId, recipient_id: recipientId, round: i + 1, text_enc }),
+      );
+      p.confirmed = true;
+      const d = drafts.findIndex((x) => x.participant_id === participantId);
+      if (d >= 0) drafts.splice(d, 1);
+      return true;
+    },
+
     async getParticipantBySession(sessionHash) {
       const p = participants.find((x) => x.session_hash === sessionHash);
       if (!p) return null;

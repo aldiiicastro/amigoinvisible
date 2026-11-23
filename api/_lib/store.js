@@ -4,7 +4,7 @@ import { getSupabase } from './supabase.js';
 // Los handlers dependen de esta interfaz, así los tests usan memoryStore.js en su lugar.
 
 const EVENT_COLS = 'id,name,status,release_at,description';
-const PARTICIPANT_COLS = 'id,name,phone,is_admin,invite_token_hash,session_hash';
+const PARTICIPANT_COLS = 'id,name,phone,is_admin,invite_token_hash,session_hash,confirmed';
 
 const db = () => getSupabase();
 
@@ -23,6 +23,7 @@ function toParticipant(row) {
     is_admin: row.is_admin,
     has_invite: Boolean(row.invite_token_hash),
     has_session: Boolean(row.session_hash),
+    has_confirmed: Boolean(row.confirmed),
   };
 }
 
@@ -168,6 +169,34 @@ const store = {
   },
 
   /** Participante (y su evento) a partir del hash de su cookie de sesión. */
+  /** Borrador cifrado de la persona: [pista1, pista2, pista3] (cada una cifrada o null). */
+  async getDraftsEnc(participantId) {
+    const row = check(await db().from('drafts').select('clue1_enc,clue2_enc,clue3_enc').eq('participant_id', participantId).maybeSingle());
+    return row ? [row.clue1_enc, row.clue2_enc, row.clue3_enc] : [null, null, null];
+  },
+
+  async saveDraftsEnc(participantId, [c1, c2, c3]) {
+    check(
+      await db()
+        .from('drafts')
+        .upsert({ participant_id: participantId, clue1_enc: c1, clue2_enc: c2, clue3_enc: c3 }),
+    );
+  },
+
+  /** Confirma las 3 pistas (ya cifradas) en una transacción. Devuelve false si ya había confirmado o el estado no lo permite. */
+  async confirmClues(eventId, participantId, recipientId, cluesEnc) {
+    return (
+      check(
+        await db().rpc('confirm_clues', {
+          p_event_id: eventId,
+          p_participant_id: participantId,
+          p_recipient_id: recipientId,
+          p_clues: cluesEnc,
+        }),
+      ) === true
+    );
+  },
+
   async getParticipantBySession(sessionHash) {
     const row = check(await db().from('participants').select(`${PARTICIPANT_COLS},event_id`).eq('session_hash', sessionHash).maybeSingle());
     if (!row) return null;

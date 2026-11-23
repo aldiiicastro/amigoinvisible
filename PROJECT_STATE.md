@@ -52,10 +52,17 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
   - Reingreso: `GET /api/me?scope=participant` ignora la sesión de admin. `/entrar/:token` consulta eso al cargar: si ya hay sesión de participante en ese teléfono, redirige a `/mi-amigo` sin gastar el enlace. Desde otro dispositivo se necesita un enlace nuevo (lo genera la organizadora).
   - Error de enlace usado más claro. 85 tests.
 
+- Etapa 4 (requiere correr `supabase/005_clues.sql`):
+  - Cada persona escribe 3 pistas sobre sí misma para quien le toca regalar (pista N → ronda N del destinatario). `GET/PUT/POST /api/clues` (función 10 de 12 en Hobby). La organizadora escribe las suyas igual, con su cookie de admin.
+  - Borrador: tabla `drafts`, 3 columnas cifradas (AES-GCM, AAD `draft:<participante>:<n>`), sin timestamps. Se guarda con PUT (puede estar incompleto).
+  - Confirmar: función SQL `confirm_clues` (transacción: bloquea evento y participante, inserta 3 filas en `clue_pool`, marca `participants.confirmed`, borra el borrador). `clue_pool` NO guarda autor ni fechas; texto cifrado con AAD `pool:<destinatario>:<ronda>`; índice único (destinatario, ronda). Tras confirmar no se puede ver ni cambiar.
+  - Progreso para la organizadora: `GET /api/event` devuelve `clues: {confirmed, total}` (solo totales; nunca por persona). Limitación aceptada: si ve el contador subir mientras alguien le avisa que confirmó, puede inferirlo.
+  - Pendiente de diseño para Etapa 5: orden del pool (`position`) se fija al liberar, mezclado con `crypto.randomInt`.
+  - 91 tests.
+
 ## Pendiente
 - Ajustes post-Etapa 3: correr `supabase/004_description.sql` en Supabase y recién después subir/desplegar.
 - Validar con impresión de la muestra nueva (90×90 mm): show-through del papel de 80 g, corte, plegado, legibilidad de 15 pt. Ajustar tamaño/límite si hace falta.
-- Etapa 4: pistas, pool anónimo, progreso.
 - Etapa 5: liberación y descarga final.
 - Etapa 6: pruebas de anonimato/permisos y guía de despliegue.
 
@@ -66,4 +73,4 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
 4. Supabase Free se pausa tras 7 días sin actividad: entrar antes del evento.
 
 ## Próximo paso
-Subir los ajustes (tras correr 004). Después, Etapa 4: pistas (borradores, confirmación, pool anónimo, progreso agregado). Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.
+Probar Etapa 4 en producción. Después, Etapa 5: liberación y PDF final. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.

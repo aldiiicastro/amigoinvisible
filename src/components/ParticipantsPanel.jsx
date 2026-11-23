@@ -86,6 +86,12 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         <Alert color="gray">Todavía faltan participantes: se necesitan al menos {limits.minToDraw} para poder sortear.</Alert>
       )}
 
+      {drawn && data.clues && (
+        <Alert color="gray" title="Pistas">
+          {data.clues.confirmed} de {data.clues.total} confirmaron sus pistas.
+        </Alert>
+      )}
+
       {drawn && (
         <Alert color="pine">
           El sorteo está hecho. Generá y mandá el enlace de cada participante. Cada enlace sirve una sola vez: el que lo abre

@@ -2,6 +2,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHandler } from './http.js';
 import {
+  cluesMethods,
   drawMethods,
   enterMethods,
   eventMethods,
@@ -32,6 +33,7 @@ beforeEach(() => {
     invites: make(inviteMethods),
     enter: make(enterMethods),
     me: make(meMethods),
+    clues: make(cluesMethods),
   };
 });
 
@@ -650,4 +652,101 @@ test('el aviso de enlace usado explica cómo volver a entrar', async () => {
   assert.match(again.body.error, /ya se usó/);
   assert.match(again.body.error, /mismo teléfono/);
   assert.match(again.body.error, /enlace nuevo/);
+});
+
+// --- Pistas (Etapa 4) ----------------------------------------------------------------------------------------------
+
+const CLUES = ['Me gustan los mates largos', 'Siempre llego tarde', 'Cocino los domingos'];
+
+async function playerSession(adminCookie, name) {
+  const p = (await participantsOf(adminCookie)).find((x) => x.name === name);
+  const res = await enterWith(await newInvite(adminCookie, p.id));
+  assert.equal(res.statusCode, 200);
+  return { cookie: sessionOf(res), id: p.id };
+}
+
+const recipientIdOf = (giverId) => cipher.decrypt(store._db.assignments.find((a) => a.giver_id === giverId).recipient_enc, giverId);
+
+test('pistas: sin sesión 401 y antes del sorteo 409', async () => {
+  assert.equal((await call(api.clues)).statusCode, 401);
+  const admin = await setupEvent();
+  assert.equal((await call(api.clues, { cookie: admin })).statusCode, 409);
+});
+
+test('pistas: borrador se guarda cifrado y se recupera', async () => {
+  const admin = await setupDrawn();
+  const bruno = await playerSession(admin, 'Bruno');
+  const put = await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: [CLUES[0], '', ''] } });
+  assert.equal(put.statusCode, 200);
+  const got = await call(api.clues, { cookie: bruno.cookie });
+  assert.deepEqual(got.body.clues, [CLUES[0], '', '']);
+  assert.equal(got.body.confirmed, false);
+  assert.ok(!JSON.stringify(store._db.drafts).includes('mates'));
+});
+
+test('pistas: confirmar exige las 3, las manda al pool anónimo y borra el borrador', async () => {
+  const admin = await setupDrawn();
+  const bruno = await playerSession(admin, 'Bruno');
+  await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: CLUES } });
+
+  const incomplete = await call(api.clues, { method: 'POST', cookie: bruno.cookie, body: { clues: [CLUES[0], '', CLUES[2]] } });
+  assert.equal(incomplete.statusCode, 400);
+  assert.equal(store._db.cluePool.length, 0);
+
+  const ok = await call(api.clues, { method: 'POST', cookie: bruno.cookie, body: { clues: CLUES } });
+  assert.equal(ok.statusCode, 200);
+
+  const pool = store._db.cluePool;
+  assert.equal(pool.length, 3);
+  const recipient = recipientIdOf(bruno.id);
+  for (const [i, row] of pool.entries()) {
+    assert.deepEqual(Object.keys(row).sort(), ['event_id', 'id', 'recipient_id', 'round', 'text_enc']); // sin autor ni fechas
+    assert.equal(row.recipient_id, recipient);
+    assert.equal(row.round, i + 1);
+    assert.equal(cipher.decrypt(row.text_enc, `pool:${recipient}:${row.round}`), CLUES[i]);
+  }
+  assert.ok(!JSON.stringify(pool).includes(bruno.id));
+  assert.equal(store._db.drafts.length, 0);
+
+  // Ya no se puede cambiar ni confirmar de nuevo, y GET no devuelve pistas.
+  assert.equal((await call(api.clues, { method: 'POST', cookie: bruno.cookie, body: { clues: CLUES } })).statusCode, 409);
+  assert.equal((await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: CLUES } })).statusCode, 409);
+  const after = await call(api.clues, { cookie: bruno.cookie });
+  assert.deepEqual(after.body.clues, ['', '', '']);
+  assert.equal(after.body.confirmed, true);
+  assert.equal(store._db.cluePool.length, 3);
+});
+
+test('pistas: validación de largo y de forma', async () => {
+  const admin = await setupDrawn();
+  const bruno = await playerSession(admin, 'Bruno');
+  const long = 'a '.repeat(200);
+  assert.equal((await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: [long, '', ''] } })).statusCode, 400);
+  assert.equal((await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: ['x'] } })).statusCode, 400);
+  assert.equal((await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: {} })).statusCode, 400);
+});
+
+test('pistas: la organizadora también escribe las suyas y el progreso es solo un total', async () => {
+  const admin = await setupDrawn();
+  const before = await call(api.event, { cookie: admin });
+  assert.deepEqual(before.body.clues, { confirmed: 0, total: PEOPLE.length + 1 });
+
+  assert.equal((await call(api.clues, { method: 'POST', cookie: admin, body: { clues: CLUES } })).statusCode, 200);
+  const bruno = await playerSession(admin, 'Bruno');
+  await call(api.clues, { method: 'POST', cookie: bruno.cookie, body: { clues: CLUES } });
+
+  const after = await call(api.event, { cookie: admin });
+  assert.deepEqual(after.body.clues, { confirmed: 2, total: PEOPLE.length + 1 });
+  // Nada por persona: ni quién confirmó ni quién está escribiendo.
+  for (const p of after.body.participants) assert.ok(!('confirmed' in p) && !('hasConfirmed' in p) && !('has_confirmed' in p));
+  assert.ok(!('clues' in (await call(api.event)).body));
+});
+
+test('pistas: el pool no se puede leer por ninguna API y el borrador de uno no lo ve otro', async () => {
+  const admin = await setupDrawn();
+  const bruno = await playerSession(admin, 'Bruno');
+  const carla = await playerSession(admin, PEOPLE[1]);
+  await call(api.clues, { method: 'PUT', cookie: bruno.cookie, body: { clues: CLUES } });
+  const seen = await call(api.clues, { cookie: carla.cookie });
+  assert.deepEqual(seen.body.clues, ['', '', '']);
 });
