@@ -6,7 +6,8 @@ export function createMemoryStore() {
   const participants = [];
   const assignments = [];
 
-  const publicEvent = (e) => (e ? { id: e.id, name: e.name, status: e.status, release_at: e.release_at } : null);
+  const publicEvent = (e) =>
+    e ? { id: e.id, name: e.name, status: e.status, release_at: e.release_at, description: e.description } : null;
   const publicParticipant = (p) =>
     p
       ? {
@@ -39,6 +40,7 @@ export function createMemoryStore() {
         name,
         status: 'preparing',
         release_at: null,
+        description: '',
         admin_token_hash: adminTokenHash,
         recovery_hash: recoveryHash,
       };
@@ -51,6 +53,9 @@ export function createMemoryStore() {
     },
     async setRecoveryHash(eventId, hash) {
       events.find((e) => e.id === eventId).recovery_hash = hash;
+    },
+    async setEventDescription(eventId, description) {
+      events.find((e) => e.id === eventId).description = description;
     },
     async deleteEvent(eventId) {
       const i = events.findIndex((e) => e.id === eventId);

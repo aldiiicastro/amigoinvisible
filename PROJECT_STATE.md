@@ -36,7 +36,7 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
   - Frontend: `/` neutra, `/admin` (crear evento → código de recuperación → panel de participantes con alta/edición/baja, nuevo código y borrar evento).
   - 45 tests (`npm test`): permisos, validación, hashes en la base, cookies, recuperación. La capa de Supabase y el frontend NO se probaron automáticamente (sin red en la sesión de desarrollo).
 
-- Etapa 3 (código listo, falta subir, `supabase/003_draw.sql`, variable `DATA_ENCRYPTION_KEY` en Vercel y probar en producción):
+- Etapa 3 (desplegada y probada en producción):
   - Sorteo: `POST /api/draw`. Derangement uniforme por rechazo con `crypto.randomInt` (`api/_lib/draw.js`, admite `isAllowed` para exclusiones futuras), mínimo 3. Se guarda con la función SQL `perform_draw` (una transacción que bloquea el evento y pasa `preparing → drawn`), por lo que no se puede sortear dos veces. La respuesta no trae el resultado.
   - Cifrado: `api/_lib/cipher.js`, AES-256-GCM con clave `DATA_ENCRYPTION_KEY`; el destinatario se cifra atado al id de quien regala (AAD). **No perder ni cambiar la clave después de sortear.**
   - Invitaciones: `POST /api/invites` (admin, solo en `drawn`) devuelve un token que se ve una sola vez; en la base solo el hash. Generar uno nuevo invalida el anterior y cierra la sesión de ese participante. El panel muestra por persona: sin enlace / enlace generado / ya entró.
@@ -47,8 +47,13 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
   - Funciones Vercel: 9 de 12 permitidas en el plan Hobby (`draw, enter, event, health, invites, me, participants, recover, recovery-code`). Etapas 4 y 5 agregan ~2: considerar unir endpoints si hace falta.
   - 76 tests (`npm test`): derangement (reglas y uniformidad), cifrado, canje único, permisos, privacidad de `/api/me`. Supabase y el frontend siguen sin pruebas automáticas.
 
+- Ajustes post-Etapa 3 (requieren correr `supabase/004_description.sql`):
+  - Indicaciones: `events.description` (≤600 caracteres), `PATCH /api/event`. Se agregan al final del mensaje de WhatsApp y se muestran en `/mi-amigo`. Mensaje: `Hola <nombre>, te paso el enlace para tu amigo invisible "<evento>":\n<enlace>\n\n<indicaciones>` (sin emoji).
+  - Reingreso: `GET /api/me?scope=participant` ignora la sesión de admin. `/entrar/:token` consulta eso al cargar: si ya hay sesión de participante en ese teléfono, redirige a `/mi-amigo` sin gastar el enlace. Desde otro dispositivo se necesita un enlace nuevo (lo genera la organizadora).
+  - Error de enlace usado más claro. 85 tests.
+
 ## Pendiente
-- Etapa 3: subir, correr `supabase/003_draw.sql`, cargar `DATA_ENCRYPTION_KEY` en Vercel (redeploy) y probar con 3+ personas de prueba.
+- Ajustes post-Etapa 3: correr `supabase/004_description.sql` en Supabase y recién después subir/desplegar.
 - Validar con impresión de la muestra nueva (90×90 mm): show-through del papel de 80 g, corte, plegado, legibilidad de 15 pt. Ajustar tamaño/límite si hace falta.
 - Etapa 4: pistas, pool anónimo, progreso.
 - Etapa 5: liberación y descarga final.
@@ -61,4 +66,4 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
 4. Supabase Free se pausa tras 7 días sin actividad: entrar antes del evento.
 
 ## Próximo paso
-Subir Etapa 3, correr `supabase/003_draw.sql`, crear `DATA_ENCRYPTION_KEY` en Vercel (ver `.env.example`) y probar sorteo + enlaces. Después, Etapa 4: pistas (borradores, confirmación, pool anónimo, progreso agregado). Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.
+Subir los ajustes (tras correr 004). Después, Etapa 4: pistas (borradores, confirmación, pool anónimo, progreso agregado). Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.

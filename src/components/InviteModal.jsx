@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Code, Group, Modal, Stack, Text } from '@mantine/core';
+import { Alert, Button, Card, Group, Modal, Stack, Text } from '@mantine/core';
 import { api } from '../api.js';
 
 const WARNING = {
@@ -9,7 +9,7 @@ const WARNING = {
 };
 
 // Genera el enlace privado de un participante. El enlace se ve solo ahora: en el servidor queda únicamente su hash.
-export default function InviteModal({ opened, participant, eventName, onClose, onChanged }) {
+export default function InviteModal({ opened, participant, eventName, description, onClose, onChanged }) {
   const [token, setToken] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -31,7 +31,7 @@ export default function InviteModal({ opened, participant, eventName, onClose, o
 
   const link = token ? `${window.location.origin}/entrar/${token}` : null;
   const message = link
-    ? `¡Hola ${participant.name}! 🎄 Te paso tu enlace privado para el Amigo Invisible "${eventName}":\n\n${link}\n\nEs solo para vos: abrilo desde tu celular y no lo reenvíes. Ahí vas a ver a quién le regalás y a preparar tus pistas.`
+    ? [`Hola ${participant.name}, te paso el enlace para tu amigo invisible "${eventName}":`, link, ...(description ? ['', description] : [])].join('\n')
     : null;
   const whatsappUrl = message ? `https://wa.me/${participant.phone}?text=${encodeURIComponent(message)}` : null;
 
@@ -71,9 +71,11 @@ export default function InviteModal({ opened, participant, eventName, onClose, o
             <Alert color="cranberry">
               Este enlace es solo para {participant.name}. <b>No lo abras vos</b>: si lo hacés, deja de servirle.
             </Alert>
-            <Code block style={{ wordBreak: 'break-all' }}>
-              {link}
-            </Code>
+            <Card withBorder padding="sm">
+              <Text size="sm" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {message}
+              </Text>
+            </Card>
             <Button component="a" href={whatsappUrl} target="_blank" rel="noopener noreferrer" size="md" color="pine">
               Enviar por WhatsApp
             </Button>

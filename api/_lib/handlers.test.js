@@ -130,7 +130,7 @@ test('la respuesta de GET no incluye hashes ni ids del evento', async () => {
   const res = await call(api.event, { cookie });
   const text = JSON.stringify(res.body);
   assert.ok(!text.includes('hash'));
-  assert.deepEqual(Object.keys(res.body.event).sort(), ['name', 'releaseAt', 'status']);
+  assert.deepEqual(Object.keys(res.body.event).sort(), ['description', 'name', 'releaseAt', 'status']);
 });
 
 test('validaciones al crear: nombre del evento, nombre con emoji y celular', async () => {
@@ -566,4 +566,88 @@ test('borrar un evento ya sorteado exige confirmación explícita y limpia todo'
   assert.equal(store._db.events.length, 0);
   assert.equal(store._db.assignments.length, 0);
   assert.equal((await call(api.me, { cookie: session })).body.state, 'no_session');
+});
+
+// --- Indicaciones del evento y reingreso ---------------------------------------------------------------------------
+
+const DESCRIPTION = 'Tener las pistas listas para el 23 a la noche.\nEl monto máximo a gastar es de $25.000.';
+
+test('indicaciones: la organizadora las guarda y las ve en el panel', async () => {
+  const cookie = await setupEvent();
+  const empty = await call(api.event, { cookie });
+  assert.equal(empty.body.event.description, '');
+
+  const saved = await call(api.event, { method: 'PATCH', cookie, body: { description: `  ${DESCRIPTION}  \n\n\n\n` } });
+  assert.equal(saved.statusCode, 200);
+  assert.equal(saved.body.description, DESCRIPTION); // recorta y limpia saltos de línea de más
+  assert.equal((await call(api.event, { cookie })).body.event.description, DESCRIPTION);
+});
+
+test('indicaciones: se pueden vaciar, y se rechaza lo demasiado largo', async () => {
+  const cookie = await setupEvent();
+  await call(api.event, { method: 'PATCH', cookie, body: { description: 'algo' } });
+  const cleared = await call(api.event, { method: 'PATCH', cookie, body: { description: '' } });
+  assert.equal(cleared.statusCode, 200);
+  assert.equal((await call(api.event, { cookie })).body.event.description, '');
+
+  const tooLong = await call(api.event, { method: 'PATCH', cookie, body: { description: 'x'.repeat(601) } });
+  assert.equal(tooLong.statusCode, 400);
+});
+
+test('indicaciones: solo la organizadora puede cambiarlas', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const session = sessionOf(await enterWith(await newInvite(cookie, bruno.id)));
+
+  const anon = await call(api.event, { method: 'PATCH', body: { description: 'hack' } });
+  const asParticipant = await call(api.event, { method: 'PATCH', cookie: session, body: { description: 'hack' } });
+  assert.deepEqual([anon.statusCode, asParticipant.statusCode], [401, 401]);
+  assert.equal(store._db.events[0].description, '');
+});
+
+test('indicaciones: cada participante las ve en su pantalla, también antes del sorteo para la organizadora', async () => {
+  const cookie = await setupEvent();
+  await call(api.event, { method: 'PATCH', cookie, body: { description: DESCRIPTION } });
+  assert.equal((await call(api.me, { cookie })).body.event.description, DESCRIPTION); // not_drawn
+
+  await call(api.draw, { method: 'POST', cookie, body: {} });
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const session = sessionOf(await enterWith(await newInvite(cookie, bruno.id)));
+  assert.equal((await call(api.me, { cookie: session })).body.event.description, DESCRIPTION);
+});
+
+test('indicaciones: no se filtran sin sesión', async () => {
+  const cookie = await setupEvent();
+  await call(api.event, { method: 'PATCH', cookie, body: { description: DESCRIPTION } });
+  assert.ok(!JSON.stringify((await call(api.event)).body).includes('monto'));
+  assert.ok(!JSON.stringify((await call(api.me)).body).includes('monto'));
+});
+
+test('me?scope=participant ignora la sesión de la organizadora', async () => {
+  const cookie = await setupDrawn();
+  const asAdmin = await call(api.me, { cookie });
+  assert.equal(asAdmin.body.state, 'ok');
+  const scoped = await call(api.me, { cookie, query: { scope: 'participant' } });
+  assert.deepEqual(scoped.body, { state: 'no_session' });
+});
+
+test('me?scope=participant reconoce a quien ya entró (para no gastar de nuevo su enlace)', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const session = sessionOf(await enterWith(await newInvite(cookie, bruno.id)));
+  const scoped = await call(api.me, { cookie: session, query: { scope: 'participant' } });
+  assert.equal(scoped.body.state, 'ok');
+  assert.equal(scoped.body.me.name, 'Bruno');
+});
+
+test('el aviso de enlace usado explica cómo volver a entrar', async () => {
+  const cookie = await setupDrawn();
+  const bruno = (await participantsOf(cookie)).find((p) => p.name === 'Bruno');
+  const token = await newInvite(cookie, bruno.id);
+  await enterWith(token);
+  const again = await enterWith(token);
+  assert.equal(again.statusCode, 404);
+  assert.match(again.body.error, /ya se usó/);
+  assert.match(again.body.error, /mismo teléfono/);
+  assert.match(again.body.error, /enlace nuevo/);
 });

@@ -10,7 +10,14 @@ import {
   sha256,
   tokenFromRequest,
 } from './auth.js';
-import { MAX_PARTICIPANTS, nameKey, normalizeName, parsePhone, validateEventName } from './validate.js';
+import {
+  MAX_PARTICIPANTS,
+  nameKey,
+  normalizeName,
+  parsePhone,
+  validateDescription,
+  validateEventName,
+} from './validate.js';
 import { checkName } from './cardsPdf.js';
 import { MIN_PLAYERS, drawAssignments, isValidAssignment } from './draw.js';
 
@@ -46,7 +53,12 @@ async function requireEditable(ctx) {
   return event;
 }
 
-const toPublicEvent = (e) => ({ name: e.name, status: e.status, releaseAt: e.release_at ?? null });
+const toPublicEvent = (e) => ({
+  name: e.name,
+  status: e.status,
+  releaseAt: e.release_at ?? null,
+  description: e.description ?? '',
+});
 
 /**
  * `invite` solo existe después del sorteo: 'none' (sin enlace), 'generated' (enlace creado, sin abrir) o
@@ -140,6 +152,15 @@ export const eventMethods = {
       cookies: [sessionCookie(token, ctx.req)],
       body: { recoveryCode, event: toPublicEvent(event) },
     };
+  },
+
+  /** Actualiza las indicaciones del evento: se agregan al mensaje de WhatsApp y las ve cada participante. */
+  async PATCH(ctx) {
+    const event = await requireEditable(ctx);
+    const description = validateDescription(ctx.body.description);
+    if (description.error) throw new HttpError(400, description.error);
+    await ctx.store.setEventDescription(event.id, description.value);
+    return { body: { description: description.value } };
   },
 
   /**
@@ -285,7 +306,7 @@ export const enterMethods = {
     const token = String(ctx.body.token ?? '');
     const invalid = new HttpError(
       404,
-      'Este enlace ya se usó o no es válido. Si no lo abriste vos, avisale a quien organiza el juego.',
+      'Este enlace ya se usó o no es válido. Si ya entraste antes, abrí la página desde el mismo teléfono. Si no, pedile a quien organiza un enlace nuevo.',
     );
     if (token.length < 20 || token.length > 100) throw invalid;
 
@@ -305,7 +326,8 @@ export const meMethods = {
     const sessionToken = tokenFromRequest(ctx.req, PARTICIPANT_COOKIE);
     if (sessionToken) found = await ctx.store.getParticipantBySession(sha256(sessionToken));
 
-    if (!found) {
+    // Con ?scope=participant solo cuenta la sesión de participante (lo usa la pantalla del enlace).
+    if (!found && ctx.req.query?.scope !== 'participant') {
       // La organizadora juega como cualquier otra: entra con su sesión de administración.
       const event = await currentEvent(ctx);
       const admin = event ? await ctx.store.getAdminParticipant(event.id) : null;
@@ -315,13 +337,20 @@ export const meMethods = {
 
     const { participant, event } = found;
     const me = { name: participant.name, isAdmin: participant.is_admin };
-    if (event.status === 'preparing') return { body: { state: 'not_drawn', event: { name: event.name }, me } };
+    if (event.status === 'preparing') return { body: { state: 'not_drawn', event: { name: event.name, description: event.description ?? '' }, me } };
 
     const encrypted = await ctx.store.getRecipientEnc(participant.id);
-    if (!encrypted) return { body: { state: 'no_assignment', event: { name: event.name }, me } };
+    if (!encrypted) return { body: { state: 'no_assignment', event: { name: event.name, description: event.description ?? '' }, me } };
     const recipient = await ctx.store.getParticipantById(event.id, ctx.cipher.decrypt(encrypted, participant.id));
-    if (!recipient) return { body: { state: 'no_assignment', event: { name: event.name }, me } };
+    if (!recipient) return { body: { state: 'no_assignment', event: { name: event.name, description: event.description ?? '' }, me } };
 
-    return { body: { state: 'ok', event: { name: event.name, status: event.status }, me, recipientName: recipient.name } };
+    return {
+      body: {
+        state: 'ok',
+        event: { name: event.name, status: event.status, description: event.description ?? '' },
+        me,
+        recipientName: recipient.name,
+      },
+    };
   },
 };

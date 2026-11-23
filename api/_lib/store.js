@@ -3,7 +3,7 @@ import { getSupabase } from './supabase.js';
 // Único lugar que habla con Supabase para el evento, los participantes y el sorteo.
 // Los handlers dependen de esta interfaz, así los tests usan memoryStore.js en su lugar.
 
-const EVENT_COLS = 'id,name,status,release_at';
+const EVENT_COLS = 'id,name,status,release_at,description';
 const PARTICIPANT_COLS = 'id,name,phone,is_admin,invite_token_hash,session_hash';
 
 const db = () => getSupabase();
@@ -68,6 +68,10 @@ const store = {
 
   async setRecoveryHash(eventId, hash) {
     check(await db().from('events').update({ recovery_hash: hash }).eq('id', eventId));
+  },
+
+  async setEventDescription(eventId, description) {
+    check(await db().from('events').update({ description }).eq('id', eventId));
   },
 
   async deleteEvent(eventId) {

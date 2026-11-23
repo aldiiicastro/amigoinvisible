@@ -9,6 +9,7 @@ create table events (
   status           text not null default 'preparing'
                    check (status in ('preparing', 'drawn', 'released', 'closed')),
   release_at       timestamptz,                -- liberación por fecha límite
+  description      text not null default '',   -- indicaciones para los participantes
   admin_token_hash text not null,              -- sesión de gestión (hash, nunca el token)
   recovery_hash    text,                       -- código de recuperación (hash)
   created_at       timestamptz not null default now()

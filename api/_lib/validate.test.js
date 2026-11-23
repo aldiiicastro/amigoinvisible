@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nameKey, normalizeName, parsePhone, validateEventName } from './validate.js';
+import { nameKey, normalizeName, parsePhone, validateDescription, validateEventName } from './validate.js';
 
 test('parsePhone: celular argentino local de 10 dígitos', () => {
   assert.deepEqual(parsePhone('11 2345-6789'), { value: '5491123456789' });
@@ -37,4 +37,12 @@ test('validateEventName', () => {
   assert.deepEqual(validateEventName(' Navidad 2026 '), { value: 'Navidad 2026' });
   assert.ok(validateEventName('   ').error);
   assert.ok(validateEventName('x'.repeat(61)).error);
+});
+
+test('validateDescription: limpia espacios y saltos de línea, admite vacío y limita el largo', () => {
+  assert.deepEqual(validateDescription('  hola  \r\n\r\n\r\n\r\nchau \n'), { value: 'hola\n\nchau' });
+  assert.deepEqual(validateDescription(undefined), { value: '' });
+  assert.deepEqual(validateDescription('con \u0000 control'), { value: 'con  control' });
+  assert.ok(validateDescription('x'.repeat(601)).error);
+  assert.deepEqual(validateDescription('x'.repeat(600)).value.length, 600);
 });

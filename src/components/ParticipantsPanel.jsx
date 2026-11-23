@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Badge, Button, Card, Divider, Group, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Alert, Badge, Button, Card, Divider, Group, Stack, Text, TextInput, Textarea, Title } from '@mantine/core';
 import { api } from '../api.js';
 import ConfirmModal from './ConfirmModal.jsx';
 import InviteModal from './InviteModal.jsx';
@@ -20,6 +20,10 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [confirmText, setConfirmText] = useState('');
+  const [description, setDescription] = useState(event.description ?? '');
+  const [descBusy, setDescBusy] = useState(false);
+  const [descError, setDescError] = useState(null);
+  const [descSaved, setDescSaved] = useState(false);
 
   const count = participants.length;
   const preparing = event.status === 'preparing';
@@ -33,6 +37,22 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
     setModal(next);
   }
   const close = () => setModal(null);
+
+  async function saveDescription() {
+    setDescBusy(true);
+    setDescError(null);
+    setDescSaved(false);
+    try {
+      const res = await api.setDescription(description);
+      setDescription(res.description);
+      await reload();
+      setDescSaved(true);
+    } catch (err) {
+      setDescError(err.message);
+    } finally {
+      setDescBusy(false);
+    }
+  }
 
   async function run(action, onDone) {
     setBusy(true);
@@ -71,6 +91,35 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
           El sorteo está hecho. Generá y mandá el enlace de cada participante. Cada enlace sirve una sola vez: el que lo abre
           primero lo gasta, así que no abras los de los demás.
         </Alert>
+      )}
+
+      {canEditNames && (
+        <Card withBorder padding="sm">
+          <Stack gap="xs">
+            <Textarea
+              label="Indicaciones para los participantes"
+              description='Se agregan al final del mensaje de WhatsApp y cada participante las ve en su pantalla. Ejemplo: "Tener las pistas listas para el 23 a la noche. El monto máximo a gastar es de $25.000."'
+              value={description}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                setDescSaved(false);
+              }}
+              maxLength={600}
+              autosize
+              minRows={3}
+              size="md"
+            />
+            {descError && <Alert color="cranberry">{descError}</Alert>}
+            <Group justify="space-between">
+              <Text size="xs" c="dimmed">
+                {descSaved ? 'Guardado ✓' : `${description.length}/600`}
+              </Text>
+              <Button size="xs" onClick={saveDescription} loading={descBusy} disabled={description === (event.description ?? '')}>
+                Guardar indicaciones
+              </Button>
+            </Group>
+          </Stack>
+        </Card>
       )}
 
       <Stack gap="xs">
@@ -175,6 +224,7 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
           opened
           participant={modal.participant}
           eventName={event.name}
+          description={event.description}
           onClose={close}
           onChanged={reload}
         />

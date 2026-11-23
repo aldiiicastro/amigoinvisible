@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Alert, Button, Stack, Text, Title } from '@mantine/core';
+import { Alert, Button, Loader, Stack, Text, Title } from '@mantine/core';
 import { api } from '../api.js';
 
 // El enlace se canjea con un botón (POST) y no al cargar la página: así las vistas previas de WhatsApp no lo gastan.
@@ -9,6 +9,23 @@ export default function Enter() {
   const navigate = useNavigate();
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(true);
+
+  // Si esta persona ya entró desde este teléfono, no hace falta gastar el enlace: va directo a su pantalla.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .me('participant')
+      .then((res) => {
+        if (cancelled) return;
+        if (res.state !== 'no_session') navigate('/mi-amigo', { replace: true });
+        else setChecking(false);
+      })
+      .catch(() => !cancelled && setChecking(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   async function enter() {
     setBusy(true);
@@ -21,6 +38,8 @@ export default function Enter() {
       setBusy(false);
     }
   }
+
+  if (checking) return <Loader size="sm" />;
 
   return (
     <Stack gap="md">

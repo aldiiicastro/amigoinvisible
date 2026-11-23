@@ -57,6 +57,14 @@ export default function MyFriend() {
           {data.recipientName}
         </Title>
       </Card>
+      {data.event.description && (
+        <Card withBorder padding="md">
+          <Text fw={600} mb={4}>
+            Indicaciones
+          </Text>
+          <Text style={{ whiteSpace: 'pre-wrap' }}>{data.event.description}</Text>
+        </Card>
+      )}
       <Text c="dimmed">
         Es un secreto: no se lo cuentes a nadie. Podés volver a esta pantalla cuando quieras desde este mismo teléfono.
       </Text>

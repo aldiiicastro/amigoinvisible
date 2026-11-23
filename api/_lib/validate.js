@@ -1,5 +1,6 @@
 export const MAX_PARTICIPANTS = 40;
 export const MAX_EVENT_NAME_LENGTH = 60;
+export const MAX_DESCRIPTION_LENGTH = 600;
 
 const PHONE_HELP = 'Ingresá el celular con código de área, sin 0 ni 15. Ejemplo: 11 2345 6789.';
 
@@ -50,4 +51,21 @@ export function parsePhone(input) {
   }
   if (digits.length === 10) return { value: `549${digits}` };
   return { error: PHONE_HELP };
+}
+
+/**
+ * Indicaciones para los participantes (texto libre, puede tener varias líneas). Puede quedar vacía.
+ * @returns {{value: string} | {error: string}}
+ */
+export function validateDescription(input) {
+  const value = String(input ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (value.length > MAX_DESCRIPTION_LENGTH) {
+    return { error: `Las indicaciones superan los ${MAX_DESCRIPTION_LENGTH} caracteres.` };
+  }
+  return { value };
 }
