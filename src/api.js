@@ -5,10 +5,21 @@ export class ApiError extends Error {
   }
 }
 
+// Evento sobre el que se está trabajando (lo fija la pantalla según la dirección). Se manda como ?event=<id>.
+let activeEvent = null;
+export function setActiveEvent(id) {
+  activeEvent = id || null;
+}
+
+function withEvent(path) {
+  if (!activeEvent) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}event=${encodeURIComponent(activeEvent)}`;
+}
+
 async function request(method, path, body) {
   let res;
   try {
-    res = await fetch(path, {
+    res = await fetch(withEvent(path), {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -28,11 +39,13 @@ async function request(method, path, body) {
 
 export const api = {
   getEvent: () => request('GET', '/api/event'),
+  listEvents: () => request('GET', '/api/event?list=1'),
   createEvent: (payload) => request('POST', '/api/event', payload),
   deleteEvent: (confirmDrawn = false) => request('DELETE', `/api/event${confirmDrawn ? '?confirm=BORRAR' : ''}`),
   draw: () => request('POST', '/api/draw', {}),
   createInvite: (participantId) => request('POST', '/api/invites', { participantId }),
   enter: (token) => request('POST', '/api/enter', { token }),
+  peekInvite: (token) => request('POST', '/api/enter', { token, peek: true }),
   me: (scope) => request('GET', `/api/me${scope ? `?scope=${scope}` : ''}`),
   releaseClues: () => request('POST', '/api/cards', {}),
   getClues: () => request('GET', '/api/clues'),

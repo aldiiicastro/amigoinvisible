@@ -1,38 +1,48 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Loader, Stack, Text, Title } from '@mantine/core';
-import { api } from '../api.js';
+import { api, setActiveEvent } from '../api.js';
+
+const USED_MESSAGE =
+  'Este enlace ya se usó o no es válido. Si ya entraste antes, abrí la página desde el mismo teléfono. Si no, pedile a quien organiza un enlace nuevo.';
 
 // El enlace se canjea con un botón (POST) y no al cargar la página: así las vistas previas de WhatsApp no lo gastan.
 export default function Enter() {
   const { token } = useParams();
   const navigate = useNavigate();
+  setActiveEvent(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true);
 
-  // Si esta persona ya entró desde este teléfono, no hace falta gastar el enlace: va directo a su pantalla.
+  // Primero se mira (sin gastarlo) si el enlace sirve. Si ya no sirve pero este teléfono ya tiene sesión, va directo.
   useEffect(() => {
     let cancelled = false;
-    api
-      .me('participant')
-      .then((res) => {
+    (async () => {
+      try {
+        const { valid } = await api.peekInvite(token);
         if (cancelled) return;
-        if (res.state !== 'no_session') navigate('/mi-amigo', { replace: true });
-        else setChecking(false);
-      })
-      .catch(() => !cancelled && setChecking(false));
+        if (valid) return setChecking(false);
+        const me = await api.me('participant');
+        if (cancelled) return;
+        if (me.state !== 'no_session') return navigate('/mi-amigo', { replace: true });
+        setError(USED_MESSAGE);
+      } catch {
+        if (!cancelled) setError(null);
+      }
+      if (!cancelled) setChecking(false);
+    })();
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [token, navigate]);
 
   async function enter() {
     setBusy(true);
     setError(null);
     try {
-      await api.enter(token);
-      navigate('/mi-amigo', { replace: true }); // reemplaza la dirección: el enlace no queda en el historial
+      const res = await api.enter(token);
+      navigate(res.eventId ? `/mi-amigo/${res.eventId}` : '/mi-amigo', { replace: true }); // el enlace no queda en el historial
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -50,9 +60,11 @@ export default function Enter() {
         desde el mismo teléfono sin necesidad del enlace.
       </Text>
       {error && <Alert color="cranberry">{error}</Alert>}
-      <Button size="lg" onClick={enter} loading={busy}>
-        Entrar
-      </Button>
+      {error !== USED_MESSAGE && (
+        <Button size="lg" onClick={enter} loading={busy}>
+          Entrar
+        </Button>
+      )}
     </Stack>
   );
 }

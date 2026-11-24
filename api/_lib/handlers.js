@@ -1,7 +1,8 @@
 import { HttpError } from './http.js';
 import {
   PARTICIPANT_COOKIE,
-  clearSessionCookie,
+  addSessionToken,
+  tokensFromRequest,
   isValidRecoveryCodeShape,
   newRecoveryCode,
   newToken,
@@ -26,15 +27,32 @@ import { shuffle } from './random.js';
 
 // --- Helpers -------------------------------------------------------------------------------------------------------
 
-async function currentEvent({ req, store }) {
+const MAX_EVENTS = 20;
+
+/** La organizadora de la sesión (cookie de administración) y todos sus eventos, o null. */
+async function adminContext({ req, store }) {
   const token = tokenFromRequest(req);
   if (!token) return null;
-  return store.getEventByAdminHash(sha256(token));
+  const organizer = await store.getOrganizerByAdminHash(sha256(token));
+  if (!organizer) return null;
+  return { organizer, events: await store.listEventsByOrganizer(organizer.id) };
+}
+
+/** Elige el evento: el de ?event=<id>, o el único que tenga. Devuelve null si hay que elegir. */
+function pickEvent(events, req) {
+  const id = req.query?.event;
+  if (id) return events.find((e) => e.id === id) ?? null;
+  return events.length === 1 ? events[0] : null;
 }
 
 async function requireAdmin(ctx) {
-  const event = await currentEvent(ctx);
-  if (!event) throw new HttpError(401, 'Tu sesión de administradora no es válida. Ingresá con tu código de recuperación.');
+  const admin = await adminContext(ctx);
+  if (!admin) throw new HttpError(401, 'Tu sesión de administradora no es válida. Ingresá con tu código de recuperación.');
+  const event = pickEvent(admin.events, ctx.req);
+  if (!event) {
+    if (ctx.req.query?.event) throw new HttpError(404, 'No encontramos ese evento.');
+    throw new HttpError(400, 'Elegí un evento.');
+  }
   return event;
 }
 
@@ -57,6 +75,7 @@ async function requireEditable(ctx) {
 }
 
 const toPublicEvent = (e) => ({
+  id: e.id,
   name: e.name,
   status: e.status,
   releaseAt: e.release_at ?? null,
@@ -101,28 +120,45 @@ function assertNameFree(list, name, exceptId = null) {
 /**
  * Quién está del otro lado: sesión de participante o, si no hay, la organizadora (con su cookie de administración).
  * Con ?scope=participant solo cuenta la sesión de participante.
+ * Si tiene varios eventos y no dice cuál (?event=<id>), devuelve `choices`.
  */
 async function resolveParticipant(ctx) {
-  let found = null;
-  const sessionToken = tokenFromRequest(ctx.req, PARTICIPANT_COOKIE);
-  if (sessionToken) found = await ctx.store.getParticipantBySession(sha256(sessionToken));
-  if (!found && ctx.req.query?.scope !== 'participant') {
-    const event = await currentEvent(ctx);
-    const admin = event ? await ctx.store.getAdminParticipant(event.id) : null;
-    if (event && admin) found = { participant: admin, event };
+  const candidates = [];
+  for (const token of tokensFromRequest(ctx.req, PARTICIPANT_COOKIE)) {
+    const session = await ctx.store.getParticipantBySession(sha256(token));
+    if (session && !candidates.some((c) => c.event.id === session.event.id)) candidates.push(session);
   }
-  return found;
+  if (ctx.req.query?.scope !== 'participant') {
+    const admin = await adminContext(ctx);
+    for (const event of admin?.events ?? []) {
+      if (candidates.some((c) => c.event.id === event.id)) continue;
+      const adminPlayer = await ctx.store.getAdminParticipant(event.id);
+      if (adminPlayer) candidates.push({ participant: adminPlayer, event });
+    }
+  }
+  const wanted = ctx.req.query?.event;
+  if (wanted) return { found: candidates.find((c) => c.event.id === wanted) ?? null };
+  if (candidates.length <= 1) return { found: candidates[0] ?? null };
+  return { choices: candidates.map((c) => ({ id: c.event.id, name: c.event.name })) };
 }
 
 export const eventMethods = {
   /** Estado para la pantalla de administración. Sin sesión válida no devuelve nada del evento. */
   async GET(ctx) {
-    const event = await currentEvent(ctx);
-    if (event) {
+    const admin = await adminContext(ctx);
+    if (admin) {
+      const events = admin.events.map((e) => ({ id: e.id, name: e.name, status: e.status }));
+      if (ctx.req.query?.list) return { body: { state: 'ok', events } };
+      const event = pickEvent(admin.events, ctx.req);
+      if (!event) {
+        if (ctx.req.query?.event) throw new HttpError(404, 'No encontramos ese evento.');
+        return { body: { state: 'ok', events } };
+      }
       const participants = sortParticipants(await ctx.store.listParticipants(event.id));
       return {
         body: {
           state: 'ok',
+          events,
           event: toPublicEvent(event),
           participants: participants.map((p) => toPublicParticipant(p, event.status)),
           limits: { maxParticipants: MAX_PARTICIPANTS, minToDraw: MIN_PLAYERS },
@@ -133,7 +169,7 @@ export const eventMethods = {
         },
       };
     }
-    const exists = (await ctx.store.countEvents()) > 0;
+    const exists = (await ctx.store.countOrganizers()) > 0;
     return { body: { state: exists ? 'needs_access' : 'no_event' } };
   },
 
@@ -149,31 +185,43 @@ export const eventMethods = {
     const phone = parsePhone(ctx.body.adminPhone);
     if (phone.error) throw new HttpError(400, phone.error);
 
-    if ((await ctx.store.countEvents()) > 0) {
-      throw new HttpError(409, 'Ya existe un evento. Ingresá con tu código de recuperación.');
+    // Con sesión válida se suma un evento a la organizadora. Sin sesión solo se puede crear la primera vez.
+    const admin = await adminContext(ctx);
+    let organizerId;
+    let token = null;
+    let recoveryCode = null;
+    if (admin) {
+      if (admin.events.length >= MAX_EVENTS) throw new HttpError(409, `El máximo es de ${MAX_EVENTS} eventos.`);
+      organizerId = admin.organizer.id;
+    } else {
+      const taken = new HttpError(409, 'Ya hay una organizadora registrada. Ingresá con tu código de recuperación.');
+      if ((await ctx.store.countOrganizers()) > 0) throw taken;
+      token = newToken();
+      recoveryCode = newRecoveryCode();
+      try {
+        organizerId = (
+          await ctx.store.createOrganizer({
+            adminTokenHash: sha256(token),
+            recoveryHash: sha256(normalizeRecoveryCode(recoveryCode)),
+          })
+        ).id;
+      } catch (err) {
+        if (err.code === 'DUPLICATE_ORGANIZER') throw taken;
+        throw err;
+      }
     }
 
-    const token = newToken();
-    const recoveryCode = newRecoveryCode();
     let event;
     try {
-      event = await ctx.store.createEvent({
-        name: eventName.value,
-        adminTokenHash: sha256(token),
-        recoveryHash: sha256(normalizeRecoveryCode(recoveryCode)),
-        adminName,
-        adminPhone: phone.value,
-      });
+      event = await ctx.store.createEvent({ organizerId, name: eventName.value, adminName, adminPhone: phone.value });
     } catch (err) {
-      if (err.code === 'DUPLICATE_EVENT') {
-        throw new HttpError(409, 'Ya existe un evento. Ingresá con tu código de recuperación.');
-      }
+      if (!admin) await ctx.store.deleteOrganizer(organizerId); // no dejar una organizadora sin llave
       throw err;
     }
     return {
       status: 201,
-      cookies: [sessionCookie(token, ctx.req)],
-      body: { recoveryCode, event: toPublicEvent(event) },
+      cookies: token ? [sessionCookie(token, ctx.req)] : [],
+      body: { event: toPublicEvent(event), ...(recoveryCode ? { recoveryCode } : {}) },
     };
   },
 
@@ -199,7 +247,7 @@ export const eventMethods = {
       throw new HttpError(409, 'El sorteo ya se hizo. Borrarlo destruye el resultado: hace falta confirmarlo.');
     }
     await ctx.store.deleteEvent(event.id);
-    return { cookies: [clearSessionCookie(ctx.req)], body: { ok: true } };
+    return { body: { ok: true } };
   },
 };
 
@@ -250,11 +298,11 @@ export const recoverMethods = {
     const code = normalizeRecoveryCode(ctx.body.code);
     const invalid = new HttpError(401, 'El código no es correcto. Revisalo e intentá de nuevo.');
     if (!isValidRecoveryCodeShape(code)) throw invalid;
-    const event = await ctx.store.getEventByRecoveryHash(sha256(code));
-    if (!event) throw invalid;
+    const organizer = await ctx.store.getOrganizerByRecoveryHash(sha256(code));
+    if (!organizer) throw invalid;
 
     const token = newToken();
-    await ctx.store.setAdminTokenHash(event.id, sha256(token));
+    await ctx.store.setOrganizerAdminHash(organizer.id, sha256(token));
     return { cookies: [sessionCookie(token, ctx.req)], body: { ok: true } };
   },
 };
@@ -262,9 +310,10 @@ export const recoverMethods = {
 export const recoveryCodeMethods = {
   /** Genera un código nuevo. El anterior deja de servir. Se muestra una sola vez. */
   async POST(ctx) {
-    const event = await requireAdmin(ctx);
+    const admin = await adminContext(ctx);
+    if (!admin) throw new HttpError(401, 'Tu sesión de administradora no es válida. Ingresá con tu código de recuperación.');
     const recoveryCode = newRecoveryCode();
-    await ctx.store.setRecoveryHash(event.id, sha256(normalizeRecoveryCode(recoveryCode)));
+    await ctx.store.setOrganizerRecoveryHash(admin.organizer.id, sha256(normalizeRecoveryCode(recoveryCode)));
     return { body: { recoveryCode } };
   },
 };
@@ -331,12 +380,22 @@ export const enterMethods = {
       404,
       'Este enlace ya se usó o no es válido. Si ya entraste antes, abrí la página desde el mismo teléfono. Si no, pedile a quien organiza un enlace nuevo.',
     );
-    if (token.length < 20 || token.length > 100) throw invalid;
+    const wellFormed = token.length >= 20 && token.length <= 100;
+
+    // Mirar sin gastar: la pantalla del enlace pregunta primero si todavía sirve.
+    if (ctx.body.peek) return { body: { valid: wellFormed && (await ctx.store.hasInvite(sha256(token))) } };
+    if (!wellFormed) throw invalid;
 
     const sessionToken = newToken();
     const participantId = await ctx.store.redeemInvite(sha256(token), sha256(sessionToken));
     if (!participantId) throw invalid;
-    return { cookies: [sessionCookie(sessionToken, ctx.req, PARTICIPANT_COOKIE)], body: { ok: true } };
+    const session = await ctx.store.getParticipantBySession(sha256(sessionToken));
+    // Una misma persona puede jugar varios eventos desde el mismo teléfono: se suma la sesión a las que ya tenía.
+    const cookieValue = addSessionToken(ctx.req, sessionToken, PARTICIPANT_COOKIE);
+    return {
+      cookies: [sessionCookie(cookieValue, ctx.req, PARTICIPANT_COOKIE)],
+      body: { ok: true, eventId: session?.event.id ?? null },
+    };
   },
 };
 
@@ -345,32 +404,23 @@ export const enterMethods = {
 export const meMethods = {
   /** Lo único que ve cada persona: su propio nombre y a quién le toca regalar. */
   async GET(ctx) {
-    let found = null;
-    const sessionToken = tokenFromRequest(ctx.req, PARTICIPANT_COOKIE);
-    if (sessionToken) found = await ctx.store.getParticipantBySession(sha256(sessionToken));
-
-    // Con ?scope=participant solo cuenta la sesión de participante (lo usa la pantalla del enlace).
-    if (!found && ctx.req.query?.scope !== 'participant') {
-      // La organizadora juega como cualquier otra: entra con su sesión de administración.
-      const event = await currentEvent(ctx);
-      const admin = event ? await ctx.store.getAdminParticipant(event.id) : null;
-      if (event && admin) found = { participant: admin, event };
-    }
+    const { found, choices } = await resolveParticipant(ctx);
+    if (choices) return { body: { state: 'choose', events: choices } };
     if (!found) return { body: { state: 'no_session' } };
 
     const { participant, event } = found;
     const me = { name: participant.name, isAdmin: participant.is_admin };
-    if (event.status === 'preparing') return { body: { state: 'not_drawn', event: { name: event.name, description: event.description ?? '' }, me } };
+    if (event.status === 'preparing') return { body: { state: 'not_drawn', event: { ...(participant.is_admin ? { id: event.id } : {}), name: event.name, description: event.description ?? '' }, me } };
 
     const encrypted = await ctx.store.getRecipientEnc(participant.id);
-    if (!encrypted) return { body: { state: 'no_assignment', event: { name: event.name, description: event.description ?? '' }, me } };
+    if (!encrypted) return { body: { state: 'no_assignment', event: { ...(participant.is_admin ? { id: event.id } : {}), name: event.name, description: event.description ?? '' }, me } };
     const recipient = await ctx.store.getParticipantById(event.id, ctx.cipher.decrypt(encrypted, participant.id));
-    if (!recipient) return { body: { state: 'no_assignment', event: { name: event.name, description: event.description ?? '' }, me } };
+    if (!recipient) return { body: { state: 'no_assignment', event: { ...(participant.is_admin ? { id: event.id } : {}), name: event.name, description: event.description ?? '' }, me } };
 
     return {
       body: {
         state: 'ok',
-        event: { name: event.name, status: event.status, description: event.description ?? '' },
+        event: { ...(participant.is_admin ? { id: event.id } : {}), name: event.name, status: event.status, description: event.description ?? '' },
         me,
         recipientName: recipient.name,
       },
@@ -384,7 +434,8 @@ const CLUE_COUNT = 3;
 
 /** Devuelve la persona y su destinatario, o lanza el error que corresponda. */
 async function requireGiver(ctx) {
-  const found = await resolveParticipant(ctx);
+  const { found, choices } = await resolveParticipant(ctx);
+  if (choices) throw new HttpError(400, 'Elegí un evento.');
   if (!found) throw new HttpError(401, 'No encontramos tu sesión. Entrá desde tu enlace.');
   const { participant, event } = found;
   if (event.status !== 'drawn') throw new HttpError(409, 'Las pistas se escriben después del sorteo y hasta que se liberen.');

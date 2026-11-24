@@ -13,7 +13,7 @@ const INVITE_BADGE = {
   entered: { label: 'Ya entró', color: 'pine' },
 };
 
-export default function ParticipantsPanel({ data, reload, onNewCode }) {
+export default function ParticipantsPanel({ data, reload, onNewCode, onDeleted }) {
   const { event, participants, limits } = data;
   // modal: { type: 'add' | 'edit' | 'remove' | 'invite' | 'draw' | 'newCode' | 'deleteEvent', participant? }
   const [modal, setModal] = useState(null);
@@ -219,7 +219,7 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
       )}
 
       {(drawn || released) && (
-        <Button component={Link} to="/mi-amigo" size="md" variant="light">
+        <Button component={Link} to={`/mi-amigo/${event.id}`} size="md" variant="light">
           Ver a quién me toca
         </Button>
       )}
@@ -344,7 +344,7 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
           )
         }
       >
-        <Text>El código anterior va a dejar de funcionar. El nuevo se muestra una sola vez.</Text>
+        <Text>El código anterior va a dejar de funcionar. El nuevo sirve para todos tus eventos y se muestra una sola vez.</Text>
       </ConfirmModal>
 
       <ConfirmModal
@@ -358,7 +358,7 @@ export default function ParticipantsPanel({ data, reload, onNewCode }) {
         onConfirm={() =>
           run(
             () => api.deleteEvent(!preparing),
-            () => reload(),
+            async () => onDeleted(),
           )
         }
       >

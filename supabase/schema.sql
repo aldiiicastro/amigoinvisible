@@ -1,17 +1,24 @@
--- Amigo Invisible: esquema COMPLETO (etapas 0 a 5). Para una instalación nueva, ejecutar este archivo entero
--- en Supabase > SQL Editor. Los archivos 002 a 006 son solo las migraciones para quien ya tenía una versión anterior.
+-- Amigo Invisible: esquema COMPLETO (etapas 0 a 7). Para una instalación nueva, ejecutar este archivo entero
+-- en Supabase > SQL Editor. Los archivos 002 a 007 son solo las migraciones para quien ya tenía una versión anterior.
 -- Todo el acceso pasa por funciones del servidor con la service role key.
 -- RLS activado sin políticas: anon y authenticated no pueden leer ni escribir nada.
 
+-- Quien administra (una por instalación). Su sesión y su código de recuperación valen para todos sus eventos.
+create table organizers (
+  id               uuid primary key default gen_random_uuid(),
+  admin_token_hash text not null unique,       -- sesión de gestión (hash, nunca el token)
+  recovery_hash    text not null unique        -- código de recuperación (hash)
+);
+create unique index only_one_organizer on organizers ((true));
+
 create table events (
   id               uuid primary key default gen_random_uuid(),
+  organizer_id     uuid not null references organizers(id) on delete cascade,
   name             text not null,
   status           text not null default 'preparing'
                    check (status in ('preparing', 'drawn', 'released', 'closed')),
-  release_at       timestamptz,                -- liberación por fecha límite
+  release_at       timestamptz,                -- sin uso: la liberación es manual
   description      text not null default '',   -- indicaciones para los participantes
-  admin_token_hash text not null,              -- sesión de gestión (hash, nunca el token)
-  recovery_hash    text,                       -- código de recuperación (hash)
   created_at       timestamptz not null default now()
 );
 
@@ -54,6 +61,7 @@ create table clue_pool (
 );
 create index clue_pool_event_idx on clue_pool(event_id);
 
+alter table organizers   enable row level security;
 alter table events       enable row level security;
 alter table participants enable row level security;
 alter table assignments  enable row level security;
@@ -62,8 +70,6 @@ alter table clue_pool    enable row level security;
 
 revoke all on all tables in schema public from anon, authenticated;
 
--- Etapa 2: un solo evento por instalación (MVP). Quitar este índice cuando se agregue el historial de eventos.
-create unique index only_one_event on events ((true));
 
 -- Etapa 3: sorteo atómico (ver supabase/003_draw.sql).
 create or replace function perform_draw(p_event_id uuid, p_assignments jsonb)

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 // Implementación en memoria de la misma interfaz que store.js. Solo para tests.
 export function createMemoryStore() {
+  const organizers = [];
   const events = [];
   const participants = [];
   const assignments = [];
@@ -25,37 +26,46 @@ export function createMemoryStore() {
 
   return {
     // Acceso directo para que los tests puedan inspeccionar lo que se guardó.
-    _db: { events, participants, assignments, drafts, cluePool },
+    _db: { organizers, events, participants, assignments, drafts, cluePool },
 
-    async countEvents() {
-      return events.length;
+    async countOrganizers() {
+      return organizers.length;
     },
-    async getEventByAdminHash(hash) {
-      return publicEvent(events.find((e) => e.admin_token_hash === hash));
+    async getOrganizerByAdminHash(hash) {
+      const o = organizers.find((x) => x.admin_token_hash === hash);
+      return o ? { id: o.id } : null;
     },
-    async getEventByRecoveryHash(hash) {
-      return publicEvent(events.find((e) => e.recovery_hash === hash));
+    async getOrganizerByRecoveryHash(hash) {
+      const o = organizers.find((x) => x.recovery_hash === hash);
+      return o ? { id: o.id } : null;
     },
-    async createEvent({ name, adminTokenHash, recoveryHash, adminName, adminPhone }) {
-      if (events.length > 0) throw Object.assign(new Error('Ya existe un evento.'), { code: 'DUPLICATE_EVENT' });
-      const event = {
-        id: randomUUID(),
-        name,
-        status: 'preparing',
-        release_at: null,
-        description: '',
-        admin_token_hash: adminTokenHash,
-        recovery_hash: recoveryHash,
-      };
+    async createOrganizer({ adminTokenHash, recoveryHash }) {
+      if (organizers.length > 0) throw Object.assign(new Error('Ya existe una organizadora.'), { code: 'DUPLICATE_ORGANIZER' });
+      const o = { id: randomUUID(), admin_token_hash: adminTokenHash, recovery_hash: recoveryHash };
+      organizers.push(o);
+      return { id: o.id };
+    },
+    async deleteOrganizer(id) {
+      const i = organizers.findIndex((o) => o.id === id);
+      if (i >= 0) organizers.splice(i, 1);
+    },
+    async setOrganizerAdminHash(id, hash) {
+      organizers.find((o) => o.id === id).admin_token_hash = hash;
+    },
+    async setOrganizerRecoveryHash(id, hash) {
+      organizers.find((o) => o.id === id).recovery_hash = hash;
+    },
+    async listEventsByOrganizer(organizerId) {
+      return events.filter((e) => e.organizer_id === organizerId).map(publicEvent);
+    },
+    async createEvent({ organizerId, name, adminName, adminPhone }) {
+      const event = { id: randomUUID(), organizer_id: organizerId, name, status: 'preparing', release_at: null, description: '' };
       events.push(event);
       participants.push({ id: randomUUID(), event_id: event.id, name: adminName, phone: adminPhone, is_admin: true });
       return publicEvent(event);
     },
-    async setAdminTokenHash(eventId, hash) {
-      events.find((e) => e.id === eventId).admin_token_hash = hash;
-    },
-    async setRecoveryHash(eventId, hash) {
-      events.find((e) => e.id === eventId).recovery_hash = hash;
+    async hasInvite(tokenHash) {
+      return participants.some((p) => p.invite_token_hash === tokenHash);
     },
     async setEventDescription(eventId, description) {
       events.find((e) => e.id === eventId).description = description;

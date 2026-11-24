@@ -12,8 +12,10 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/admin" element={<Admin />} />
+        <Route path="/admin/:eventId" element={<Admin />} />
         <Route path="/entrar/:token" element={<Enter />} />
         <Route path="/mi-amigo" element={<MyFriend />} />
+        <Route path="/mi-amigo/:eventId" element={<MyFriend />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Container>

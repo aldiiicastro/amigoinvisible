@@ -34,25 +34,56 @@ const store = {
     return count ?? 0;
   },
 
-  async getEventByAdminHash(hash) {
-    return check(await db().from('events').select(EVENT_COLS).eq('admin_token_hash', hash).maybeSingle());
+  // --- Organizadora (una por instalación): dueña de todos los eventos ---
+  async countOrganizers() {
+    const { count, error } = await db().from('organizers').select('id', { count: 'exact', head: true });
+    if (error) throw error;
+    return count ?? 0;
   },
 
-  async getEventByRecoveryHash(hash) {
-    return check(await db().from('events').select(EVENT_COLS).eq('recovery_hash', hash).maybeSingle());
+  async getOrganizerByAdminHash(hash) {
+    return check(await db().from('organizers').select('id').eq('admin_token_hash', hash).maybeSingle());
   },
 
-  /** Crea el evento y la participante administradora. Lanza { code: 'DUPLICATE_EVENT' } si ya hay un evento. */
-  async createEvent({ name, adminTokenHash, recoveryHash, adminName, adminPhone }) {
-    const { data: event, error } = await db()
-      .from('events')
-      .insert({ name, admin_token_hash: adminTokenHash, recovery_hash: recoveryHash })
-      .select(EVENT_COLS)
+  async getOrganizerByRecoveryHash(hash) {
+    return check(await db().from('organizers').select('id').eq('recovery_hash', hash).maybeSingle());
+  },
+
+  /** Lanza { code: 'DUPLICATE_ORGANIZER' } si ya hay una. */
+  async createOrganizer({ adminTokenHash, recoveryHash }) {
+    const { data, error } = await db()
+      .from('organizers')
+      .insert({ admin_token_hash: adminTokenHash, recovery_hash: recoveryHash })
+      .select('id')
       .single();
     if (error) {
-      if (error.code === '23505') throw Object.assign(new Error('Ya existe un evento.'), { code: 'DUPLICATE_EVENT' });
+      if (error.code === '23505') throw Object.assign(new Error('Ya existe una organizadora.'), { code: 'DUPLICATE_ORGANIZER' });
       throw error;
     }
+    return data;
+  },
+
+  async deleteOrganizer(id) {
+    check(await db().from('organizers').delete().eq('id', id));
+  },
+
+  async setOrganizerAdminHash(id, hash) {
+    check(await db().from('organizers').update({ admin_token_hash: hash }).eq('id', id));
+  },
+
+  async setOrganizerRecoveryHash(id, hash) {
+    check(await db().from('organizers').update({ recovery_hash: hash }).eq('id', id));
+  },
+
+  async listEventsByOrganizer(organizerId) {
+    return check(await db().from('events').select(EVENT_COLS).eq('organizer_id', organizerId).order('created_at'));
+  },
+
+  /** Crea el evento y la participante administradora. */
+  async createEvent({ organizerId, name, adminName, adminPhone }) {
+    const event = check(
+      await db().from('events').insert({ organizer_id: organizerId, name }).select(EVENT_COLS).single(),
+    );
     const { error: participantError } = await db()
       .from('participants')
       .insert({ event_id: event.id, name: adminName, phone: adminPhone, is_admin: true });
@@ -61,14 +92,6 @@ const store = {
       throw participantError;
     }
     return event;
-  },
-
-  async setAdminTokenHash(eventId, hash) {
-    check(await db().from('events').update({ admin_token_hash: hash }).eq('id', eventId));
-  },
-
-  async setRecoveryHash(eventId, hash) {
-    check(await db().from('events').update({ recovery_hash: hash }).eq('id', eventId));
   },
 
   async setEventDescription(eventId, description) {
@@ -168,7 +191,12 @@ const store = {
     return rows[0]?.id ?? null;
   },
 
-  /** Participante (y su evento) a partir del hash de su cookie de sesión. */
+  /** ¿Hay un enlace sin usar con este hash? No lo gasta. */
+  async hasInvite(tokenHash) {
+    const row = check(await db().from('participants').select('id').eq('invite_token_hash', tokenHash).maybeSingle());
+    return Boolean(row);
+  },
+
   /** Borrador cifrado de la persona: [pista1, pista2, pista3] (cada una cifrada o null). */
   async getDraftsEnc(participantId) {
     const row = check(await db().from('drafts').select('clue1_enc,clue2_enc,clue3_enc').eq('participant_id', participantId).maybeSingle());

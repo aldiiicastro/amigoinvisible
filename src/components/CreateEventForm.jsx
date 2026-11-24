@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { Alert, Button, Stack, Text, TextInput, Title } from '@mantine/core';
 import { api } from '../api.js';
 
-export default function CreateEventForm({ onCreated }) {
-  const [eventName, setEventName] = useState('Navidad 2026');
+export default function CreateEventForm({ onCreated, title = 'Crear el evento' }) {
+  const [eventName, setEventName] = useState('');
   const [adminName, setAdminName] = useState('');
   const [adminPhone, setAdminPhone] = useState('');
   const [error, setError] = useState(null);
@@ -15,7 +15,7 @@ export default function CreateEventForm({ onCreated }) {
     setError(null);
     try {
       const res = await api.createEvent({ eventName, adminName, adminPhone });
-      onCreated(res.recoveryCode);
+      onCreated(res);
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -25,9 +25,9 @@ export default function CreateEventForm({ onCreated }) {
   return (
     <form onSubmit={submit}>
       <Stack gap="md">
-        <Title order={2}>Crear el evento</Title>
+        <Title order={2}>{title}</Title>
         <Text c="dimmed">Vos también jugás: cargá tu nombre y tu WhatsApp como un participante más.</Text>
-        <TextInput label="Nombre del evento" value={eventName} onChange={(e) => setEventName(e.target.value)} required size="md" />
+        <TextInput label="Nombre del evento" placeholder="Ej.: Navidad 2026 Familia" value={eventName} onChange={(e) => setEventName(e.target.value)} required size="md" />
         <TextInput
           label="Tu nombre"
           description="Es el que va a aparecer en las tarjetas."

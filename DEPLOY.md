@@ -18,7 +18,8 @@ Si ya tenías una versión anterior instalada, no vuelvas a correr `schema.sql`:
 
 ## 2. Cómo se juega (en orden)
 
-1. Entrá a `/admin`, creá el evento y **guardá el código de recuperación** (se muestra una sola vez; no lo mandes por WhatsApp ni lo dejes como borrador en un chat).
+1. Entrá a `/admin`, creá el evento y **guardá el código de recuperación** (se muestra una sola vez, es uno solo para todos tus eventos; no lo mandes por WhatsApp ni lo dejes como borrador en un chat).
+   Para otro grupo (por ejemplo Familia y Amigos) usá **Crear otro evento** en `/admin`: cada evento tiene sus propios participantes, sorteo y pistas.
 2. Cargá a todos (nombre y WhatsApp). Mínimo 3. Después del sorteo no se suma ni se quita gente.
 3. Escribí las indicaciones (fecha límite, monto) y tocá **Hacer el sorteo**. Es definitivo.
 4. Para cada persona: **Generar enlace > Enviar por WhatsApp**. Cada enlace sirve una sola vez: **no abras los de los demás**. Si alguien cambia de teléfono o lo pierde, generale un enlace nuevo (el anterior deja de funcionar).
@@ -31,6 +32,6 @@ Si ya tenías una versión anterior instalada, no vuelvas a correr `schema.sql`:
 - **Supabase gratis se pausa tras 7 días sin actividad.** Entrá a `/api/health` o al panel unos días antes del evento; si estaba pausado, reactivalo desde supabase.com.
 - Si perdés el acceso de administradora: `/admin` > "Soy quien organiza el juego" > código de recuperación. Si lo perdiste también, el evento no se puede administrar (habría que borrarlo desde Supabase y empezar de cero).
 - Después de usar el código de recuperación para entrar, generá uno nuevo desde el panel si sospechás que alguien lo vio.
-- Tu propia pantalla de juego está en `/mi-amigo`.
+- Tu propia pantalla de juego está en `/mi-amigo` (si jugás en varios eventos, te deja elegir cuál). Si una persona juega en dos eventos, recibe un enlace por cada uno y los dos quedan en su teléfono.
 - Para borrar todo y empezar de nuevo: **Borrar el evento** (escribir BORRAR). Es el modo de limpiar el evento de prueba.
 - Desarrollo local: `npm install`, copiar `.env.example` a `.env.local` y completarlo, `npx vercel dev` (con `npm run dev` solo corre el frontend). Tests: `npm test`.

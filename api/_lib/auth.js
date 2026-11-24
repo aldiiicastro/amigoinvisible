@@ -49,6 +49,18 @@ export function tokenFromRequest(req, cookieName = SESSION_COOKIE) {
   return parseCookies(req.headers?.cookie)[cookieName] || null;
 }
 
+/** La cookie de participante puede guardar varias sesiones (una por evento), separadas por punto. */
+export const MAX_PARTICIPANT_SESSIONS = 10;
+export function tokensFromRequest(req, cookieName = PARTICIPANT_COOKIE) {
+  return String(tokenFromRequest(req, cookieName) ?? '')
+    .split('.')
+    .filter(Boolean)
+    .slice(0, MAX_PARTICIPANT_SESSIONS);
+}
+export function addSessionToken(req, token, cookieName = PARTICIPANT_COOKIE) {
+  return [token, ...tokensFromRequest(req, cookieName)].slice(0, MAX_PARTICIPANT_SESSIONS).join('.');
+}
+
 /** Secure salvo que el proxy diga explícitamente que es http (desarrollo local). */
 export function isSecureRequest(req) {
   return req.headers?.['x-forwarded-proto'] !== 'http';

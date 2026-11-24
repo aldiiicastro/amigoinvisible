@@ -112,7 +112,7 @@ test('crear evento: devuelve código de recuperación, cookie segura y a la admi
   assert.equal(state.body.participants[0].phone, '5491123456789');
 });
 
-test('solo se puede crear un evento', async () => {
+test('sin sesión no se puede crear otro evento ni otra organizadora', async () => {
   await createEvent();
   const again = await call(api.event, { method: 'POST', body: NEW_EVENT });
   assert.equal(again.statusCode, 409);
@@ -129,19 +129,20 @@ test('sin sesión válida, GET no filtra nada del evento ni de los participantes
 test('la base guarda solo hashes: ni el token de sesión ni el código de recuperación en claro', async () => {
   const { cookie, recoveryCode } = await createEvent();
   const token = cookie.split('=')[1];
-  const stored = JSON.stringify(store._db.events[0]);
+  const stored = JSON.stringify(store._db.organizers[0]);
   assert.ok(!stored.includes(token));
   assert.ok(!stored.includes(recoveryCode));
   assert.ok(!stored.includes(recoveryCode.replaceAll('-', '')));
-  assert.equal(store._db.events[0].admin_token_hash, sha256(token));
+  assert.equal(store._db.organizers[0].admin_token_hash, sha256(token));
 });
 
-test('la respuesta de GET no incluye hashes ni ids del evento', async () => {
+test('la respuesta de GET no incluye hashes ni datos internos', async () => {
   const { cookie } = await createEvent();
   const res = await call(api.event, { cookie });
   const text = JSON.stringify(res.body);
   assert.ok(!text.includes('hash'));
-  assert.deepEqual(Object.keys(res.body.event).sort(), ['description', 'name', 'releaseAt', 'status']);
+  assert.deepEqual(Object.keys(res.body.event).sort(), ['description', 'id', 'name', 'releaseAt', 'status']);
+  assert.deepEqual(Object.keys(res.body.events[0]).sort(), ['id', 'name', 'status']);
 });
 
 test('validaciones al crear: nombre del evento, nombre con emoji y celular', async () => {
@@ -154,7 +155,7 @@ test('validaciones al crear: nombre del evento, nombre con emoji y celular', asy
     const res = await call(api.event, { method: 'POST', body });
     assert.equal(res.statusCode, 400, JSON.stringify(body));
   }
-  assert.equal(await store.countEvents(), 0);
+  assert.equal(store._db.events.length + store._db.organizers.length, 0);
 });
 
 // --- Participantes -------------------------------------------------------------------------------------------------
@@ -281,10 +282,12 @@ test('borrar evento en preparación: limpia todo y se puede crear otro', async (
   const { cookie } = await createEvent();
   const res = await call(api.event, { method: 'DELETE', cookie });
   assert.equal(res.statusCode, 200);
-  assert.ok(String(res.headers['Set-Cookie'][0]).includes('Max-Age=0'));
   assert.equal(store._db.events.length, 0);
   assert.equal(store._db.participants.length, 0);
-  assert.equal((await call(api.event, { method: 'POST', body: NEW_EVENT })).statusCode, 201);
+  // la organizadora sigue: puede crear otro con la misma sesión, sin código nuevo
+  const again = await call(api.event, { method: 'POST', cookie, body: NEW_EVENT });
+  assert.equal(again.statusCode, 201);
+  assert.equal(again.body.recoveryCode, undefined);
 });
 
 test('borrar evento sin sesión → 401 y no borra nada', async () => {
@@ -332,7 +335,7 @@ test('código nuevo: el anterior deja de servir y requiere sesión', async () =>
 test('las modificaciones exigen JSON (defensa contra CSRF)', async () => {
   const res = await call(api.event, { method: 'POST', body: NEW_EVENT, contentType: 'text/plain' });
   assert.equal(res.statusCode, 415);
-  assert.equal(await store.countEvents(), 0);
+  assert.equal(store._db.events.length + store._db.organizers.length, 0);
 });
 
 test('métodos no permitidos → 405 y las respuestas no se cachean', async () => {
@@ -851,7 +854,7 @@ test('borrar evento liberado exige confirmar', async () => {
 const ALLOWED_KEYS = new Set([
   'state', 'event', 'name', 'status', 'releaseAt', 'description', 'participants', 'id', 'phone', 'isAdmin', 'invite',
   'limits', 'maxParticipants', 'minToDraw', 'clues', 'confirmed', 'total', 'me', 'recipientName', 'maxLength', 'count',
-  'ok', 'token', 'recoveryCode',
+  'ok', 'token', 'recoveryCode', 'events',
 ]);
 
 function keysOf(value, out = new Set()) {
@@ -981,4 +984,130 @@ test('seguridad: las operaciones que cambian datos exigen JSON (anti-CSRF)', asy
     assert.equal((await call(handler, { method: 'POST', cookie, ...form })).statusCode, 415);
   }
   assert.equal((await call(api.clues, { method: 'PUT', cookie: players[0].cookie, ...form })).statusCode, 415);
+});
+
+// --- Varios eventos ------------------------------------------------------------------------------------------------
+
+/** Crea la organizadora con un evento y le suma otro. Devuelve la cookie y los ids de ambos. */
+async function twoEvents() {
+  const first = await call(api.event, { method: 'POST', body: { ...NEW_EVENT, eventName: 'Navidad Familia' } });
+  const cookie = sessionOf(first);
+  const second = await call(api.event, { method: 'POST', cookie, body: { ...NEW_EVENT, eventName: 'Navidad Amigos' } });
+  assert.equal(second.statusCode, 201);
+  assert.equal(second.body.recoveryCode, undefined); // el código de recuperación es uno solo
+  assert.equal(second.headers['Set-Cookie'], undefined);
+  return { cookie, a: first.body.event.id, b: second.body.event.id, recoveryCode: first.body.recoveryCode };
+}
+
+const inEvent = (id, extra = {}) => ({ query: { event: id, ...extra } });
+
+async function addPeople(cookie, eventId, names) {
+  for (const [i, name] of names.entries()) {
+    const res = await call(api.participants, { method: 'POST', cookie, ...inEvent(eventId), body: { name, phone: `11 ${2000 + i} 0000` } });
+    assert.equal(res.statusCode, 201);
+  }
+}
+
+test('varios eventos: la lista muestra los dos y el detalle exige elegir uno', async () => {
+  const { cookie, a, b } = await twoEvents();
+  const list = await call(api.event, { cookie });
+  assert.deepEqual(list.body.events.map((e) => e.name), ['Navidad Familia', 'Navidad Amigos']);
+  assert.equal(list.body.event, undefined);
+  assert.equal((await call(api.event, { cookie, ...inEvent(a) })).body.event.name, 'Navidad Familia');
+  assert.equal((await call(api.event, { cookie, ...inEvent(b) })).body.event.name, 'Navidad Amigos');
+  assert.equal((await call(api.event, { cookie, query: { list: '1' } })).body.event, undefined);
+  assert.equal((await call(api.event, { cookie, ...inEvent('no-existe') })).statusCode, 404);
+});
+
+test('varios eventos: sin elegir evento las operaciones se rechazan y cada una afecta solo al suyo', async () => {
+  const { cookie, a, b } = await twoEvents();
+  const body = { name: 'Bruno', phone: '11 1111 1111' };
+  assert.equal((await call(api.participants, { method: 'POST', cookie, body })).statusCode, 400);
+  assert.equal((await call(api.draw, { method: 'POST', cookie, body: {} })).statusCode, 400);
+  await addPeople(cookie, a, ['Bruno', 'Carla']);
+  await addPeople(cookie, b, ['Diego']);
+  assert.equal((await call(api.draw, { method: 'POST', cookie, ...inEvent(a), body: {} })).statusCode, 200);
+  assert.equal(store._db.events.find((e) => e.id === a).status, 'drawn');
+  assert.equal(store._db.events.find((e) => e.id === b).status, 'preparing');
+  // mismo nombre permitido en eventos distintos
+  assert.equal((await call(api.participants, { method: 'POST', cookie, ...inEvent(b), body })).statusCode, 201);
+  assert.equal((await call(api.event, { cookie, ...inEvent(b) })).body.participants.length, 3);
+});
+
+test('varios eventos: borrar uno deja el otro', async () => {
+  const { cookie, a, b } = await twoEvents();
+  assert.equal((await call(api.event, { method: 'DELETE', cookie, ...inEvent(a) })).statusCode, 200);
+  assert.deepEqual((await call(api.event, { cookie })).body.event.id, b); // queda uno: es el que se muestra
+  assert.equal(store._db.events.length, 1);
+});
+
+test('varios eventos: el código de recuperación vuelve a dar acceso a todos', async () => {
+  const { cookie: old, a, b, recoveryCode } = await twoEvents();
+  const res = await call(api.recover, { method: 'POST', body: { code: recoveryCode } });
+  const cookie = sessionOf(res);
+  assert.equal((await call(api.event, { cookie })).body.events.length, 2);
+  assert.equal((await call(api.event, { cookie: old })).body.state, 'needs_access');
+  assert.ok((await call(api.event, { cookie, ...inEvent(a) })).body.event && (await call(api.event, { cookie, ...inEvent(b) })).body.event);
+});
+
+test('varios eventos: una persona en dos eventos conserva las dos sesiones en el mismo teléfono', async () => {
+  const { cookie, a, b } = await twoEvents();
+  await addPeople(cookie, a, ['Bruno', 'Carla']);
+  await addPeople(cookie, b, ['Bruno', 'Diego']);
+  for (const id of [a, b]) assert.equal((await call(api.draw, { method: 'POST', cookie, ...inEvent(id), body: {} })).statusCode, 200);
+
+  const bruno = async (eventId) => {
+    const list = (await call(api.event, { cookie, ...inEvent(eventId) })).body.participants;
+    return list.find((p) => p.name === 'Bruno').id;
+  };
+  const tokenA = (await call(api.invites, { method: 'POST', cookie, ...inEvent(a), body: { participantId: await bruno(a) } })).body.token;
+  const tokenB = (await call(api.invites, { method: 'POST', cookie, ...inEvent(b), body: { participantId: await bruno(b) } })).body.token;
+
+  // mirar el enlace no lo gasta
+  assert.deepEqual((await call(api.enter, { method: 'POST', body: { token: tokenA, peek: true } })).body, { valid: true });
+  assert.deepEqual((await call(api.enter, { method: 'POST', body: { token: tokenA, peek: true } })).body, { valid: true });
+
+  const enterA = await enterWith(tokenA);
+  assert.equal(enterA.body.eventId, a);
+  const phone = sessionOf(enterA).replace('ai_part=', '');
+  const enterB = await call(api.enter, { method: 'POST', body: { token: tokenB }, cookie: `ai_part=${phone}` });
+  assert.equal(enterB.body.eventId, b);
+  const both = sessionOf(enterB);
+  assert.equal(both.replace('ai_part=', '').split('.').length, 2);
+
+  assert.deepEqual((await call(api.enter, { method: 'POST', body: { token: tokenA, peek: true } })).body, { valid: false });
+  const choose = await call(api.me, { cookie: both });
+  assert.equal(choose.body.state, 'choose');
+  assert.deepEqual(choose.body.events.map((e) => e.id).sort(), [a, b].sort());
+  for (const id of [a, b]) {
+    const res = await call(api.me, { cookie: both, ...inEvent(id) });
+    assert.equal(res.body.state, 'ok');
+    assert.equal(res.body.me.name, 'Bruno');
+  }
+  // con una sola sesión en la cookie, el otro evento no se ve
+  assert.equal((await call(api.me, { cookie: `ai_part=${phone}`, ...inEvent(b) })).body.state, 'no_session');
+  assert.equal((await call(api.clues, { cookie: both })).statusCode, 400); // hay que elegir evento
+  assert.equal((await call(api.clues, { cookie: both, ...inEvent(a) })).statusCode, 200);
+});
+
+test('varios eventos: la organizadora juega en cada evento y elige cuál', async () => {
+  const { cookie, a, b } = await twoEvents();
+  await addPeople(cookie, a, ['Bruno', 'Carla']);
+  await addPeople(cookie, b, ['Diego', 'Elena']);
+  for (const id of [a, b]) await call(api.draw, { method: 'POST', cookie, ...inEvent(id), body: {} });
+  assert.equal((await call(api.me, { cookie })).body.state, 'choose');
+  const inA = await call(api.me, { cookie, ...inEvent(a) });
+  assert.equal(inA.body.state, 'ok');
+  assert.ok(['Bruno', 'Carla'].includes(inA.body.recipientName));
+  const inB = await call(api.me, { cookie, ...inEvent(b) });
+  assert.ok(['Diego', 'Elena'].includes(inB.body.recipientName));
+  assert.equal((await call(api.clues, { method: 'POST', cookie, ...inEvent(a), body: { clues: CLUES } })).statusCode, 200);
+  assert.deepEqual((await call(api.event, { cookie, ...inEvent(a) })).body.clues, { confirmed: 1, total: 3 });
+  assert.deepEqual((await call(api.event, { cookie, ...inEvent(b) })).body.clues, { confirmed: 0, total: 3 });
+});
+
+test('varios eventos: sin sesión no se crea otra organizadora ni se suman eventos', async () => {
+  await twoEvents();
+  assert.equal((await call(api.event, { method: 'POST', body: NEW_EVENT })).statusCode, 409);
+  assert.equal(store._db.organizers.length, 1);
 });

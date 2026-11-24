@@ -1,23 +1,39 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { Alert, Anchor, Card, Loader, Stack, Text, Title } from '@mantine/core';
-import { api } from '../api.js';
+import { api, setActiveEvent } from '../api.js';
 import CluesForm from '../components/CluesForm.jsx';
 
 // Vista de participante (también la usa la organizadora, con su propia sesión).
 export default function MyFriend() {
+  const { eventId } = useParams();
+  setActiveEvent(eventId ?? null); // antes de cualquier pedido de esta pantalla
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    setData(null);
     api
       .me()
       .then(setData)
       .catch((err) => setError(err.message));
-  }, []);
+  }, [eventId]);
 
   if (error) return <Alert color="cranberry">{error}</Alert>;
   if (!data) return <Loader size="sm" />;
+
+  if (data.state === 'choose') {
+    return (
+      <Stack gap="md">
+        <Title order={2}>¿Qué evento querés ver?</Title>
+        {data.events.map((e) => (
+          <Card key={e.id} withBorder padding="md" component={Link} to={`/mi-amigo/${e.id}`} style={{ textDecoration: 'none' }}>
+            <Text fw={600}>{e.name}</Text>
+          </Card>
+        ))}
+      </Stack>
+    );
+  }
 
   if (data.state === 'no_session') {
     return (
@@ -40,7 +56,7 @@ export default function MyFriend() {
             ? 'El sorteo todavía no se hizo. Volvé a entrar cuando esté listo.'
             : 'Todavía no tenés una asignación. Avisale a quien organiza.'}
         </Text>
-        {data.me.isAdmin && <AdminBack />}
+        {data.me.isAdmin && <AdminBack eventId={data.event?.id} />}
       </Stack>
     );
   }
@@ -75,14 +91,14 @@ export default function MyFriend() {
           Las pistas ya están armadas. Ya no se pueden cambiar. ¡Nos vemos en la entrega!
         </Alert>
       )}
-      {data.me.isAdmin && <AdminBack />}
+      {data.me.isAdmin && <AdminBack eventId={data.event?.id} />}
     </Stack>
   );
 }
 
-function AdminBack() {
+function AdminBack({ eventId }) {
   return (
-    <Anchor component={Link} to="/admin">
+    <Anchor component={Link} to={eventId ? `/admin/${eventId}` : '/admin'}>
       Volver al panel de organización
     </Anchor>
   );

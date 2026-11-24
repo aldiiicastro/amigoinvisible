@@ -18,7 +18,7 @@ export default function RecoveryCodeScreen({ code, onDone }) {
     <Stack gap="md">
       <Title order={2}>Guardá tu código de recuperación</Title>
       <Text>
-        Es la llave de tu evento. Si cambiás de celular o se borra la sesión, lo necesitás para volver a entrar como organizadora.
+        Es la llave de todos tus eventos. Si cambiás de celular o se borra la sesión, lo necesitás para volver a entrar como organizadora.
       </Text>
       <Code block fz={22} ta="center" py="md" style={{ letterSpacing: 1 }}>
         {code}

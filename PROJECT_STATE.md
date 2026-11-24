@@ -70,6 +70,14 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
 
 - Etapa 6 (sin SQL nuevo): 8 tests de anonimato/permisos (clave por clave de las respuestas, participante vs. endpoints de admin, cookies inventadas, enlace de un solo uso, pool sin autor, anti-CSRF). `supabase/schema.sql` ahora es el esquema completo (instalación nueva). Guía en `DEPLOY.md`. 105 tests.
 
+- Etapa 7: varios eventos (requiere correr `supabase/007_multi_event.sql`):
+  - Nueva tabla `organizers` (una sola fila, índice único): su sesión (cookie `ai_admin`, hash) y su código de recuperación valen para TODOS sus eventos. `events.organizer_id`; se quitó el índice `only_one_event`; `events.admin_token_hash/recovery_hash` quedan sin uso (legado, nullable). La migración copia las credenciales del evento existente a la organizadora: no hay que volver a entrar.
+  - Sin sesión solo se puede crear la primera organizadora; con sesión se suman eventos (máx. 20, sin código nuevo). Borrar un evento ya no cierra la sesión.
+  - Todas las llamadas de admin/participante llevan `?event=<id>` (el frontend lo fija con `setActiveEvent` según la ruta). Sin `event`: si hay un solo evento se usa ese; si hay varios, admin → 400 "Elegí un evento", `GET /api/event` → solo la lista, `/api/me` → `state: 'choose'`. `GET /api/event?list=1` fuerza la lista.
+  - Cookie `ai_part` guarda varias sesiones separadas por punto (hasta 10), una por evento. `POST /api/enter` con `peek: true` mira si un enlace sirve sin gastarlo (la pantalla del enlace lo usa para redirigir a quien ya tiene sesión).
+  - Rutas: `/admin` (lista), `/admin/:eventId` (panel), `/mi-amigo` (elige evento si hay varios), `/mi-amigo/:eventId`.
+  - La organizadora juega como participante en cada evento. 112 tests.
+
 ## Pendiente
 - Ajustes post-Etapa 3: correr `supabase/004_description.sql` en Supabase y recién después subir/desplegar.
 - Validar con impresión de la muestra nueva (90×90 mm): show-through del papel de 80 g, corte, plegado, legibilidad de 15 pt. Ajustar tamaño/límite si hace falta.
@@ -82,4 +90,4 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
 4. Supabase Free se pausa tras 7 días sin actividad: entrar antes del evento.
 
 ## Próximo paso
-Etapas 0 a 6 terminadas. Falta: borrar el evento de prueba, crear el real y seguir `DEPLOY.md`. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.
+Etapas 0 a 7 terminadas. Falta: borrar el evento de prueba, crear el real y seguir `DEPLOY.md`. Pendiente en paralelo: imprimir `muestra-tarjetas.pdf` y validar el plegado.
