@@ -78,6 +78,8 @@ export default function Admin() {
   }
 
   if (eventId) {
+    // Al venir de la lista, `view` todavía tiene los datos de la lista: esperar a los del evento.
+    if (view.event?.id !== eventId) return <Loader size="sm" />;
     return (
       <Stack gap="md">
         <Anchor component={Link} to="/admin" size="sm">
