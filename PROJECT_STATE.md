@@ -78,6 +78,8 @@ El navegador nunca habla con Supabase. RLS activado sin políticas. Service role
   - Rutas: `/admin` (lista), `/admin/:eventId` (panel), `/mi-amigo` (elige evento si hay varios), `/mi-amigo/:eventId`.
   - La organizadora juega como participante en cada evento. 112 tests.
 
+- README.md agregado (qué es, cómo se usa, privacidad, stack).
+
 ## Pendiente
 - Ajustes post-Etapa 3: correr `supabase/004_description.sql` en Supabase y recién después subir/desplegar.
 - Validar con impresión de la muestra nueva (90×90 mm): show-through del papel de 80 g, corte, plegado, legibilidad de 15 pt. Ajustar tamaño/límite si hace falta.
